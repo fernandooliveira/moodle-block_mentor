@@ -1676,7 +1676,7 @@ function block_fn_mentor_send_notifications($notificationid=null, $output=false)
             $courses = array();
             $notificationmessage = array();
 
-            $getcourses = function($category, &$courses){
+            $getcourses = function($category, &$courses) use (&$getcourses) {
                 if ($category->courses) {
                     foreach ($category->courses as $course) {
                         $courses[] = $course->id;
