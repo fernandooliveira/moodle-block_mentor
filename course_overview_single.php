@@ -41,7 +41,12 @@ $allownotes = get_config('block_fn_mentor', 'allownotes');
 require_login(null, false);
 
 // COURSES.
-if (!$enrolledcourses = enrol_get_all_users_courses($menteeid, 'id,fullname,shortname', null, 'fullname ASC')) {
+if($enrollmenttypeconfig = get_config('block_fn_mentor', 'includecurrentenrollments')) {
+	$enrollmenttype = true;
+} else {
+	$enrollmenttype = false;
+}
+if (!$enrolledcourses = enrol_get_all_users_courses($menteeid, $enrollmenttype, 'id,fullname,shortname', null, 'fullname ASC')) {
     print_error('error_enrolled_course', 'block_fn_mentor');
 }
 
