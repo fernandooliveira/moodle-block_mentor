@@ -222,7 +222,12 @@ echo $groupmenuhtml.$studentmenuhtml.'
     '</div></div>';
 
 // COURSES.
-if (!$enrolledcourses = enrol_get_all_users_courses($menteeid, false, 'id,fullname,shortname', 'fullname ASC')) {
+if($enrollmenttypeconfig = get_config('block_fn_mentor', 'includecurrentenrollments')) {
+	$enrollmenttype = true;
+} else {
+	$enrollmenttype = false;
+}
+if (!$enrolledcourses = enrol_get_all_users_courses($menteeid, $enrollmenttype, 'id,fullname,shortname', 'fullname ASC')) {
     $enrolledcourses = array();
 }
 $filtercourses = array();
