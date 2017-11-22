@@ -154,6 +154,7 @@ $string['importexportpagedesc'] = '<p>The import-export feature allows administr
 <li>Import the file by clicking on the Import Users button below.</li>
 </ol>';
 $string['importusers'] = 'Import users';
+$string['includecurrentenrollments'] = 'Include only current active enrollments';
 $string['includeextranedcolumns'] = 'Experimental: Include extra NED columns in Export page';
 $string['includewaitinggrade'] = 'Include waiting for grade in progress calculations';
 $string['incompleted'] = 'Incompleted';
