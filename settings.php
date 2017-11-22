@@ -226,6 +226,16 @@ $settings->add(
     )
 );
 
+// Include only current active enrolled courses?
+$settings->add(
+    new admin_setting_configcheckbox(
+        'block_fn_mentor/includecurrentenrollments',
+        get_string('includecurrentenrollments', 'block_fn_mentor'),
+        '',
+        '0'
+    )
+);
+
 $settings->add(
     new admin_setting_configtext(
         'block_fn_mentor/passinggrade',
