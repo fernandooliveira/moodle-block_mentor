@@ -138,6 +138,39 @@ if ($completion->is_enabled() && !empty($completion)) {
 									break;
 							}
 						
+					} else if ($modstatus = block_fn_mentor_forum_status($activity, $userid, true)) {
+                        //  Check for forum posts for waiting grade count.
+						switch ($modstatus) {
+							case 'submitted':
+								if ($instance->grade == 0) {
+									// Graded
+									++$completedactivities;
+								} else if ($grade = $gradefunction($instance, $menteeid)) {
+									if ($item->gradepass > 0) {
+										if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+										   // Passed
+											++$completedactivities;
+										} else {
+											// Fail.
+											++$incompletedactivities;
+										}
+									} else {
+										// Graded
+										++$completedactivities;
+									}
+								}
+								break;
+
+							case 'saved':
+								// Saved
+								++$savedactivities;
+								break;
+
+							case 'waitinggrade':
+								// Waiting for grade
+								++$waitingforgradeactivities;
+								break;
+						}
 					} else if ($modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true)) {	
 					 //  Check for manually graded quizzes.
 						switch ($modstatus) {
@@ -256,6 +289,16 @@ if ($completion->is_enabled() && !empty($completion)) {
 						 // Ungraded
 						 ++$notattemptedactivities;
 					}
+				} else if ($activity->modname == 'forum' || $activity->modname == 'hsuforum') {
+					// Count waiting for grade forums without a grade from grade function.
+					$modstatus = block_fn_mentor_forum_status($activity, $menteeid, true);
+					   // Waiting for grade
+					   if($modstatus == 'waitinggrade') {
+						   ++$waitingforgradeactivities;
+					   } else {
+						   // Ungraded
+							++$notattemptedactivities;
+					   }
 				} else if ($activity->modname == 'quiz') {
 					// Count waiting for grade quizzes without a grade from grade function.
 					$modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true);
@@ -448,7 +491,7 @@ if ($show == 'completed') {
 				// Check no grade journal.
 				$shownogradelesson = false;
 				if ($activity->modname == 'journal') { 
-					if ($journal = $DB->get_record('lesson', array('id' => $activity->instance))) {
+					if ($journal = $DB->get_record('journal', array('id' => $activity->instance))) {
 						$journalmodstatus = block_fn_mentor_journal_status($activity, $menteeid, $course, true);
 						if ($journal->grade == 0) {
 							if (($attempts = $DB->get_records('journal_entries', array(
@@ -474,7 +517,7 @@ if ($show == 'completed') {
 							$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
 							$activity->name . "</a></td>\n";
 					}
-				// Add lessons waiting for grades.
+				// Add journal waiting for grades.
 				} else if ($activity->modname == 'journal') {
 					if (($activitystate == 1 || $activitystate == 2 || $shownogradejournal) && $journalmodstatus !== 'waitinggrade') {
 						echo "<tr><td align='center'>\n";
@@ -514,7 +557,8 @@ if ($show == 'completed') {
             $data = $completion->get_data($activity, true, $menteeid, null);
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
-			//  Get the quizzes, lessons, and journals statuses.
+			//  Get the forum, quizzes, lessons, and journals statuses.
+			$forumstatus = block_fn_mentor_forum_status($activity, $menteeid);
 			$quizstatus = block_fn_mentor_quiz_status($activity, $menteeid);
             $lessonstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course);	
             $journalstatus = block_fn_mentor_journal_status($activity, $menteeid, $course);			
@@ -535,6 +579,26 @@ if ($show == 'completed') {
                         $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
                             "HEIGHT=\"16\" WIDTH=\"16\" >";
                         echo ($modtype == 'assign') ? 'assignment' : $modtype;
+                        echo "</td>\n";
+                        echo "<td align='left'><a href='" .
+                            $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+                            $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+                            $activity->name . "</a></td>\n";
+
+                    } else {
+                        continue;
+                    }
+				//  Check forum status.
+				} else if (($activity->modname == 'forum' || $activity->modname == 'hsuforum')
+                        && ($activity->completion == 2)
+                        && $forumstatus) {
+
+                    if ($forumstatus == 'submitted') {
+                        echo "<tr><td align='center'>\n";
+                        $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+                        $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+                            "HEIGHT=\"16\" WIDTH=\"16\" >";
+                        echo $modtype;
                         echo "</td>\n";
                         echo "<td align='left'><a href='" .
                             $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
@@ -650,7 +714,8 @@ if ($show == 'completed') {
             $data = $completion->get_data($activity, true, $menteeid, null);
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
-			//  Add quizzes, lesson, and journal statuses.
+			//  Add forum, quizzes, lesson, and journal statuses.
+			$forumstatus = block_fn_mentor_forum_status($activity, $menteeid);
 			$quizstatus = block_fn_mentor_quiz_status($activity, $menteeid);
             $lessonstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course);	
             $journalstatus = block_fn_mentor_journal_status($activity, $menteeid, $course);	
@@ -665,7 +730,12 @@ if ($show == 'completed') {
                         && $assignmentstatus) {
                     continue;
                 }
-				//  Check quiz, lesson, and journal statuses.
+				//  Check forum, quiz, lesson, and journal statuses.
+				if (($activity->modname == 'forum' || $activity->modname == 'hsuforum')
+                        && ($activity->completion == 2)
+                        && $forumstatus) {
+                    continue;
+                }
 				if (($activity->modname == 'quiz')
                         && ($activity->completion == 2)
                         && $quizstatus) {
@@ -704,6 +774,7 @@ if ($show == 'completed') {
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
 			//  Get quizzes, lessons, and journals statuses.
+			$forumstatus = block_fn_mentor_forum_status($activity, $menteeid);
 			$quizstatus = block_fn_mentor_quiz_status($activity, $menteeid);
             $lessonstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course);
             $journalstatus = block_fn_mentor_journal_status($activity, $menteeid, $course);		
@@ -730,7 +801,24 @@ if ($show == 'completed') {
 									$activity->name . "</a></td>\n";
 							}
 						}
-					// Check status of quiz, lessons, and journals.
+					// Check status of forum, quiz, lessons, and journals.
+					} else if (($activity->modname == 'forum' || $activity->modname == 'hsuforum')
+							&& ($activity->completion == 2)
+							&& $forumstatus) {
+						if (isset($forumstatus)) {
+							if ($forumstatus == 'waitinggrade') {
+								echo "<tr><td align='center'>\n";
+								$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+								$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+									"HEIGHT=\"16\" WIDTH=\"16\" >";
+								echo $modtype;
+								echo "</td>\n";
+								echo "<td align='left'><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+									$activity->name . "</a></td>\n";
+							}
+						}
 					} else if (($activity->modname == 'quiz')
 							&& ($activity->completion == 2)
 							&& $quizstatus) {
@@ -796,7 +884,8 @@ if ($show == 'completed') {
             $data = $completion->get_data($activity, true, $menteeid, null);
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
-			//  Get quiz, lesson, and journal status.
+			//  Get forum, quiz, lesson, and journal status.
+			$forumstatus = block_fn_mentor_forum_status($activity, $menteeid);
 			$quizstatus = block_fn_mentor_quiz_status($activity, $menteeid);
 			$lessonstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course);
 			$journalstatus = block_fn_mentor_journal_status($activity, $menteeid, $course);
@@ -823,7 +912,25 @@ if ($show == 'completed') {
                         }
                     }
                 }
-				//  Get quiz, lesson, and journal statuses.
+				//  Get forum, quiz, lesson, and journal statuses.
+				if (($activity->modname == 'forum' || $activity->modname == 'hsuforum')
+                        && ($activity->completion == 2)
+                        && $forumstatus) {
+						if (isset($forumstatus)) {
+                            if ($forumstatus == 'saved') {
+                                echo "<tr><td align='center'>\n";
+                                $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+                                $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+                                "HEIGHT=\"16\" WIDTH=\"16\" >";
+                                echo $modtype;
+                                echo "</td>\n";
+                                echo "<td align='left'><a href='" .
+                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+                                $activity->name . "</a></td>\n";
+                            }
+                        }
+				}
 				if (($activity->modname == 'quiz')
                         && ($activity->completion == 2)
                         && $quizstatus) {
