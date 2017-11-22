@@ -24,6 +24,8 @@ require_once('../../config.php');
 require_once($CFG->dirroot . '/course/lib.php');
 require_once($CFG->dirroot . '/blocks/fn_mentor/lib.php');
 require_once($CFG->libdir . '/completionlib.php');
+// Get the grade lib file for grade checks.
+require_once($CFG->libdir . '/gradelib.php');
 
 $usinghtmleditor = false;
 
@@ -51,12 +53,7 @@ if (!$canview) {
 }
 
 // Array of functions to call for grading purposes for modules.
-$modgradesarray = array(
-    'assign' => 'assign.submissions.fn.php',
-    'quiz' => 'quiz.submissions.fn.php',
-    'assignment' => 'assignment.submissions.fn.php',
-    'forum' => 'forum.submissions.fn.php',
-);
+$modgradesarray = get_graded_mods();
 
 $completedactivities = 0;
 $incompletedactivities = 0;
@@ -87,84 +84,245 @@ if ($completion->is_enabled() && !empty($completion)) {
             continue;
         }
         $instance = $DB->get_record($activity->modname, array("id" => $activity->instance));
-        $item = $DB->get_record('grade_items',
-            array("itemtype" => 'mod', "itemmodule" => $activity->modname, "iteminstance" => $activity->instance)
-        );
-
-        $libfile = $CFG->dirroot . '/mod/' . $activity->modname . '/lib.php';
-
-        if (file_exists($libfile)) {
-            require_once($libfile);
-            $gradefunction = $activity->modname . "_get_user_grades";
-
-            if ((($activity->modname != 'forum') || ($instance->assessed > 0))
-                && isset($modgradesarray[$activity->modname])) {
-
-                if (function_exists($gradefunction)) {
-
-                    if (($activity->modname == 'quiz') || ($activity->modname == 'forum')) {
-
-                        if ($grade = $gradefunction($instance, $menteeid)) {
-                            if ($item->gradepass > 0) {
-                                if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
-                                    // Passed
-                                    ++$completedactivities;
-                                } else {
-                                    // Failed
-                                    ++$incompletedactivities;
-                                }
-                            } else {
-                                // Graded
-                                ++$completedactivities;
-                            }
-                        } else {
-                            // Ungraded
-                            ++$notattemptedactivities;
-                        }
-                    } else if ($modstatus = block_fn_mentor_assignment_status($activity, $menteeid, true)) {
-                        switch ($modstatus) {
-                            case 'submitted':
-                                if ($instance->grade == 0) {
-                                    // Graded
-                                    ++$completedactivities;
-                                } elseif ($grade = $gradefunction($instance, $menteeid)) {
-                                    if ($item->gradepass > 0) {
-                                        if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
-                                            // Passed
-                                            ++$completedactivities;
-                                        } else {
-                                            // Fail.
-                                            ++$incompletedactivities;
-                                        }
-                                    } else {
-                                        // Graded
-                                        ++$completedactivities;
-                                    }
-                                }
-                                break;
-
-                            case 'saved':
-                                // Saved
-                                ++$savedactivities;
-                                break;
-
-                            case 'waitinggrade':
-                                // Waiting for grade
-                                ++$waitingforgradeactivities;
-                                break;
-                        }
-                    } else {
-                        // Ungraded
-                        ++$notattemptedactivities;
-                    }
-                }
-            }
+		//  Make sure we are only passing graded items.
+        if (!$item = $DB->get_record('grade_items',
+            array("itemtype" => 'mod', "itemmodule" => $activity->modname, "iteminstance" => $activity->instance))) {
+			continue;
         }
+        
+        $libfile = $CFG->dirroot . '/mod/' . $activity->modname . '/lib.php';
+		if (file_exists($libfile)) {
+			//  Check to see if this module is using their own get grades method or switch to the standard Moodle get grades function.					   
+			$gradefunction = $activity->modname . "_get_user_grades";
+			if(!function_exists($gradefunction)) {
+				$gradefunction = "grade_get_grades";
+			} else {
+				require_once($libfile);
+			}
+		}
+
+        if (function_exists($gradefunction)) {
+        // Loop through special cases first.
+            if (strpos($gradefunction, $activity->modname) !== false) {
+				if ($grade = $gradefunction($instance, $menteeid)) {
+					if ($modstatus = block_fn_mentor_assignment_status($activity, $menteeid, true)) {
+							switch ($modstatus) {
+								case 'submitted':
+									if ($instance->grade == 0) {
+										// Graded
+										++$completedactivities;
+									} elseif ($grade = $gradefunction($instance, $menteeid)) {
+										if ($item->gradepass > 0) {
+											if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+												// Passed
+												++$completedactivities;
+											} else {
+												// Fail.
+												++$incompletedactivities;
+											}
+										} else {
+											// Graded
+											++$completedactivities;
+										}
+									}
+									break;
+
+								case 'saved':
+									// Saved
+									++$savedactivities;
+									break;
+
+								case 'waitinggrade':
+									// Waiting for grade
+									++$waitingforgradeactivities;
+									break;
+							}
+						
+					} else if ($modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true)) {	
+					 //  Check for manually graded quizzes.
+						switch ($modstatus) {
+							case 'submitted':
+								if ($instance->grade == 0) {
+									// Graded
+									++$completedactivities;
+								} else if ($grade = $gradefunction($instance, $menteeid)) {
+									if ($item->gradepass > 0) {
+										if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+										   // Passed
+											++$completedactivities;
+										} else {
+											// Fail.
+											++$incompletedactivities;
+										}
+									} else {
+										// Graded
+										++$completedactivities;
+									}
+								}
+								break;
+
+							case 'saved':
+								// Saved
+								++$savedactivities;
+								break;
+
+							case 'waitinggrade':
+								// Waiting for grade
+								++$waitingforgradeactivities;
+								break;
+						}
+					
+				    } else if ($modstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course, true)) {	
+					 //  Check for manually graded lessons.
+						switch ($modstatus) {
+							case 'submitted':
+								if ($instance->grade == 0) {
+									// Graded
+									++$completedactivities;
+								} else if ($grade = $gradefunction($instance, $menteeid)) {
+									if ($item->gradepass > 0) {
+										if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+										   // Passed
+											++$completedactivities;
+										} else {
+											// Fail.
+											++$incompletedactivities;
+										}
+									} else {
+										// Graded
+										++$completedactivities;
+									}
+								}
+								break;
+
+							case 'saved':
+								// Saved
+								++$savedactivities;
+								break;
+
+							case 'waitinggrade':
+								// Waiting for grade
+								++$waitingforgradeactivities;
+								break;
+						}
+					
+				    } else if ($modstatus = block_fn_mentor_journal_status($activity, $menteeid, $course, true)) {
+						//  Check for journals waiting to be graded.
+						switch ($modstatus) {
+							case 'submitted':
+								if ($instance->grade == 0) {
+									// Graded
+									++$completedactivities;
+								} else if ($grade = $gradefunction($instance, $menteeid)) {
+									if ($item->gradepass > 0) {
+										if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+										   // Passed
+											++$completedactivities;
+										} else {
+											// Fail.
+											++$incompletedactivities;
+										}
+									} else {
+										// Graded
+										++$completedactivities;
+									}
+								}
+								break;
+
+							case 'saved':
+								// Saved
+								++$savedactivities;
+								break;
+
+							case 'waitinggrade':
+								// Waiting for grade
+								++$waitingforgradeactivities;
+								break;
+						}
+					} else if ($grade) {
+							 if ($item->gradepass > 0) {
+									if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+										// Passed
+										++$completedactivities;
+									} else {
+										// Failed
+										++$incompletedactivities;
+									}
+								} else {
+									// Graded
+									++$completedactivities;
+								}
+					} else {
+						 // Ungraded
+						 ++$notattemptedactivities;
+					}
+				} else if ($activity->modname == 'quiz') {
+					// Count waiting for grade quizzes without a grade from grade function.
+					$modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true);
+					   // Waiting for grade
+					   if($modstatus == 'waitinggrade') {
+						   ++$waitingforgradeactivities;
+					   } else {
+						   // Ungraded
+							++$notattemptedactivities;
+					   }
+					
+				} else if ($activity->modname == 'lesson') {
+					// Count saved lessons that don't yet have a grade
+					$modstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course, true);
+					   // Saved
+					   if($modstatus == 'saved') {
+							++$savedactivities;
+					   } else {
+						   // Ungraded
+							++$notattemptedactivities;
+					   }
+				} else if ($activity->modname == 'journal') {
+					// Count waiting for grade journals that don't yet have a grade
+					$modstatus = block_fn_mentor_journal_status($activity, $menteeid, $course, true);
+					   // Waiting for grade
+				   if($modstatus == 'waitinggrade') {
+					   ++$waitingforgradeactivities;
+				   } else {
+					   // Ungraded
+						++$notattemptedactivities;
+				   }
+				} else {
+					 // Ungraded
+					 ++$notattemptedactivities;
+				}
+			} else {
+				// Add other graded modules.
+				if ($grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid)) {
+					$usergrade = $grade[$menteeid]->items[0]->grades[$menteeid];
+					if ($usergrade->grade && $usergrade->dategraded !== null){
+							if ($item->gradepass > 0) {
+								if ($usergrade->grade >= $item->gradepass) {
+										// Passed
+										++$completedactivities;
+								} else {
+									// Failed
+									++$incompletedactivities;
+								}
+							} else {
+								// Graded
+								++$completedactivities;
+							}
+
+					} else {
+					// Ungraded
+					++$notattemptedactivities;
+					}
+				} else {
+				// Ungraded
+				++$notattemptedactivities;
+				}
+			} // End other graded modules
+        } // End check for grade function.
     }
 }
 
-
-// Switch to show soecific assignment.
+// Switch to show specific assignment.
 switch ($show) {
 
     case 'completed':
@@ -231,55 +389,141 @@ if (($show == 'completed' || $show == 'incompleted' || $show == 'draft'
     echo "</div>";
 }
 
+
 if ($show == 'completed') {
-    if ($activities) {
+    if ($activities) { 
         foreach ($activities as $activity) {
             if (!$activity->visible) {
                 continue;
             }
 
             $data = $completion->get_data($activity, false, $menteeid, null);
+
             $activitystate = $data->completionstate;
+			// Make sure this is an actual graded item by getting the gradebook entries.
+			$grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid);
+			if (!empty($grade[$menteeid]->items)) {
+				// Check no grade assignments.
+				$shownogradeassignment = false;
+				if ($activity->modname == 'assign') { 
+					if ($assignment = $DB->get_record('assign', array('id' => $activity->instance))) {
+						if ($assignment->grade == 0) {
+							if ($submission = $DB->get_records('assign_submission', array(
+								'assignment' => $assignment->id, 'userid' => $menteeid), 'attemptnumber DESC', '*', 0, 1)
+							) {
+							   $shownogradeassignment = true;
+							}
+						}
+					}
+				}
 
-            // Check no grade assignments.
-            $shownogradeassignment = false;
-            if ($activity->modname == 'assign') {
-                if ($assignment = $DB->get_record('assign', array('id' => $activity->instance))) {
-                    if ($assignment->grade == 0) {
-                        if ($submission = $DB->get_records('assign_submission', array(
-                            'assignment' => $assignment->id, 'userid' => $menteeid), 'attemptnumber DESC', '*', 0, 1)
-                        ) {
-                           $shownogradeassignment = true;
-                        }
-                    }
-                }
-            }
+				// Check no grade quiz.
+				$shownogradequiz = false;
+				if ($activity->modname == 'quiz') { 
+					if ($quiz = $DB->get_record('quiz', array('id' => $activity->instance))) {
+						if ($quiz->grade == 0) {
+							if ($attempts = $DB->get_records('quiz_attempts', array(
+								'quiz' => $quiz->id, 'userid' => $menteeid), 'attempt DESC', '*', 0, 1)
+							) {
+							   $shownogradequiz = true;
+							}
+						}
+					}
+				}
+				
+				// Check no grade lesson.
+				$shownogradelesson = false;
+				if ($activity->modname == 'lesson') { 
+					if ($lesson = $DB->get_record('lesson', array('id' => $activity->instance))) {
+						$lessonmodstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course, true);
+						if ($lesson->grade == 0) {
+							if (($attempts = $DB->get_records('lesson_timer', array(
+								'lessonid' => $lesson->id, 'userid' => $menteeid), 'attempt DESC', '*', 0, 1)) 
+							) {
+							   $shownogradelesson = true;
+							}
+						}
+					}
+				}
+				// Check no grade journal.
+				$shownogradelesson = false;
+				if ($activity->modname == 'journal') { 
+					if ($journal = $DB->get_record('lesson', array('id' => $activity->instance))) {
+						$journalmodstatus = block_fn_mentor_journal_status($activity, $menteeid, $course, true);
+						if ($journal->grade == 0) {
+							if (($attempts = $DB->get_records('journal_entries', array(
+								'journal' => $journal->id, 'userid' => $menteeid), 'id DESC', '*', 0, 1)) 
+							) {
+							   $shownogradejournal = true;
+							}
+						}
+					}
+				}
 
-
-            if ($activitystate == 1 || $activitystate == 2 || $shownogradeassignment) {
-                echo "<tr><td align='center'>\n";
-                $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
-                $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
-                    "HEIGHT=\"16\" WIDTH=\"16\" >";
-                echo ($modtype == 'assign') ? 'assignment' : $modtype;
-                echo "</td>\n";
-                echo "<td align='left'><a href='" . $CFG->wwwroot .
-                    "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
-                    $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
-                    $activity->name . "</a></td>\n";
-            }
+                // Add lessons waiting for grades.
+				if ($activity->modname == 'lesson') {
+					if (($activitystate == 1 || $activitystate == 2 || $shownogradelesson) && $lessonmodstatus !== 'waitinggrade') {
+						echo "<tr><td align='center'>\n";
+						$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+						$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+							"HEIGHT=\"16\" WIDTH=\"16\" >";
+						echo ($modtype == 'assign') ? 'assignment' : $modtype;
+						echo "</td>\n";
+						echo "<td align='left'><a href='" . $CFG->wwwroot .
+							"/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+							$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+							$activity->name . "</a></td>\n";
+					}
+				// Add lessons waiting for grades.
+				} else if ($activity->modname == 'journal') {
+					if (($activitystate == 1 || $activitystate == 2 || $shownogradejournal) && $journalmodstatus !== 'waitinggrade') {
+						echo "<tr><td align='center'>\n";
+						$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+						$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+							"HEIGHT=\"16\" WIDTH=\"16\" >";
+						echo ($modtype == 'assign') ? 'assignment' : $modtype;
+						echo "</td>\n";
+						echo "<td align='left'><a href='" . $CFG->wwwroot .
+							"/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+							$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+							$activity->name . "</a></td>\n";
+					}
+				} else if ($activitystate == 1 || $activitystate == 2 || $shownogradeassignment || $shownogradequiz || $shownogradelesson || $shownogradejournal) {
+					echo "<tr><td align='center'>\n";
+					$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+					$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+						"HEIGHT=\"16\" WIDTH=\"16\" >";
+					echo ($modtype == 'assign') ? 'assignment' : $modtype;
+					echo "</td>\n";
+					echo "<td align='left'><a href='" . $CFG->wwwroot .
+						"/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+						$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+						$activity->name . "</a></td>\n";
+				}
+			}
         }
     }
 } else if ($show == 'incompleted') {
     if ($activities) {
+		
         foreach ($activities as $activity) {
+			
             if (!$activity->visible) {
                 continue;
             }
             $data = $completion->get_data($activity, true, $menteeid, null);
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
-            if ($activitystate == 3) {
+			//  Get the quizzes, lessons, and journals statuses.
+			$quizstatus = block_fn_mentor_quiz_status($activity, $menteeid);
+            $lessonstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course);	
+            $journalstatus = block_fn_mentor_journal_status($activity, $menteeid, $course);			
+			$item = $DB->get_record('grade_items',
+            array("itemtype" => 'mod', "itemmodule" => $activity->modname, "iteminstance" => $activity->instance));
+            $grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid);
+			//  Make sure these are graded items.
+			if ($activitystate == 3 && (!empty($grade[$menteeid]->items))) {
+				
                 if (($activity->module == 1)
                         && ($activity->modname == 'assignment' || $activity->modname == 'assign')
                         && ($activity->completion == 2)
@@ -291,6 +535,66 @@ if ($show == 'completed') {
                         $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
                             "HEIGHT=\"16\" WIDTH=\"16\" >";
                         echo ($modtype == 'assign') ? 'assignment' : $modtype;
+                        echo "</td>\n";
+                        echo "<td align='left'><a href='" .
+                            $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+                            $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+                            $activity->name . "</a></td>\n";
+
+                    } else {
+                        continue;
+                    }
+				//  Check quiz status.
+				} else if (($activity->modname == 'quiz')
+                        && ($activity->completion == 2)
+                        && $quizstatus) {
+
+                    if ($quizstatus == 'submitted') {
+                        echo "<tr><td align='center'>\n";
+                        $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+                        $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+                            "HEIGHT=\"16\" WIDTH=\"16\" >";
+                        echo $modtype;
+                        echo "</td>\n";
+                        echo "<td align='left'><a href='" .
+                            $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+                            $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+                            $activity->name . "</a></td>\n";
+
+                    } else {
+                        continue;
+                    }
+				//  Check lesson status.
+                } else if (($activity->modname == 'lesson')
+                        && ($activity->completion == 2)
+                        && $lessonstatus) {
+
+                    if ($lessonstatus == 'submitted') {
+                        echo "<tr><td align='center'>\n";
+                        $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+                        $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+                            "HEIGHT=\"16\" WIDTH=\"16\" >";
+                        echo $modtype;
+                        echo "</td>\n";
+                        echo "<td align='left'><a href='" .
+                            $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+                            $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+                            $activity->name . "</a></td>\n";
+
+                    } else {
+                        continue;
+                    }
+				//  Check journal status.
+                } else if (($activity->modname == 'journal')
+                        && ($activity->completion == 2)
+                        && $journalstatus) {
+
+                    if ($journalstatus == 'submitted') {
+                        echo "<tr><td align='center'>\n";
+                        $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+                        $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+                            "HEIGHT=\"16\" WIDTH=\"16\" >";
+                        echo $modtype;
                         echo "</td>\n";
                         echo "<td align='left'><a href='" .
                             $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
@@ -312,6 +616,28 @@ if ($show == 'completed') {
                         $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
                         $activity->name . "</a></td>\n";
                 }
+            } else {
+			//  Get other graded modules.
+				if ($grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid)) {	
+				    $usergrade = $grade[$menteeid]->items[0]->grades[$menteeid];
+					if ($usergrade->grade && ($usergrade->dategraded !== null)) {
+						if($item->gradepass > 0) {
+							if (($usergrade->grade) && ($usergrade->grade < $item->gradepass)) {
+								echo "<tr><td align='center'>\n";
+								$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+								$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+									"HEIGHT=\"16\" WIDTH=\"16\" >";
+								echo ($modtype == 'assign') ? 'assignment' : $modtype;
+								echo "</td>\n";
+								echo "<td align='left'><a href='" . $CFG->wwwroot .
+									"/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+									$activity->name . "</a></td>\n";
+									
+							}
+						}
+				    }
+				}
             }
         }
     }
@@ -324,11 +650,35 @@ if ($show == 'completed') {
             $data = $completion->get_data($activity, true, $menteeid, null);
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
-            if ($activitystate == 0) {
+			//  Add quizzes, lesson, and journal statuses.
+			$quizstatus = block_fn_mentor_quiz_status($activity, $menteeid);
+            $lessonstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course);	
+            $journalstatus = block_fn_mentor_journal_status($activity, $menteeid, $course);	
+            //  Make sure these are graded items.			
+			$grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid);
+			$usergrade = $grade[$menteeid]->items[0]->grades[$menteeid];
+			//  Make sure these are graded items.
+		    if (($activitystate == 0) && (!empty($grade[$menteeid]->items)) && ($usergrade->dategraded == null)) {
                 if (($activity->module == 1)
                         && ($activity->modname == 'assignment' || $activity->modname == 'assign')
                         && ($activity->completion == 2)
                         && $assignmentstatus) {
+                    continue;
+                }
+				//  Check quiz, lesson, and journal statuses.
+				if (($activity->modname == 'quiz')
+                        && ($activity->completion == 2)
+                        && $quizstatus) {
+                    continue;
+                }
+				if (($activity->modname == 'lesson')
+                        && ($activity->completion == 2)
+                        && $lessonstatus) {
+                    continue;
+                }
+				if (($activity->modname == 'journal')
+                        && ($activity->completion == 2)
+                        && $journalstatus) {
                     continue;
                 }
                 echo "<tr><td align='center'>\n";
@@ -353,26 +703,87 @@ if ($show == 'completed') {
             $data = $completion->get_data($activity, true, $menteeid, null);
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
-            if (($activitystate == 0)||($activitystate == 1)||($activitystate == 2)||($activitystate == 3)) {
-                if (($activity->module == 1)
-                        && ($activity->modname == 'assignment' || $activity->modname == 'assign')
-                        && ($activity->completion == 2)
-                        && $assignmentstatus) {
-                    if (isset($assignmentstatus)) {
-                        if ($assignmentstatus == 'waitinggrade') {
-                            echo "<tr><td align='center'>\n";
-                            $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
-                            $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
-                                "HEIGHT=\"16\" WIDTH=\"16\" >";
-                            echo ($modtype == 'assign') ? 'assignment' : $modtype;
-                            echo "</td>\n";
-                            echo "<td align='left'><a href='" .
-                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
-                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
-                                $activity->name . "</a></td>\n";
-                        }
-                    }
-                }
+			//  Get quizzes, lessons, and journals statuses.
+			$quizstatus = block_fn_mentor_quiz_status($activity, $menteeid);
+            $lessonstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course);
+            $journalstatus = block_fn_mentor_journal_status($activity, $menteeid, $course);		
+            //  Make sure these are graded items.			
+			$grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid);
+			//  Make sure these are graded items.
+			if (!empty($grade[$menteeid]->items)) {
+				if (($activitystate == 0)||($activitystate == 1)||($activitystate == 2)||($activitystate == 3)) {
+					if (($activity->module == 1)
+							&& ($activity->modname == 'assignment' || $activity->modname == 'assign')
+							&& ($activity->completion == 2)
+							&& $assignmentstatus) {
+						if (isset($assignmentstatus)) {
+							if ($assignmentstatus == 'waitinggrade') {
+								echo "<tr><td align='center'>\n";
+								$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+								$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+									"HEIGHT=\"16\" WIDTH=\"16\" >";
+								echo ($modtype == 'assign') ? 'assignment' : $modtype;
+								echo "</td>\n";
+								echo "<td align='left'><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+									$activity->name . "</a></td>\n";
+							}
+						}
+					// Check status of quiz, lessons, and journals.
+					} else if (($activity->modname == 'quiz')
+							&& ($activity->completion == 2)
+							&& $quizstatus) {
+						if (isset($quizstatus)) {
+							if ($quizstatus == 'waitinggrade') {
+								echo "<tr><td align='center'>\n";
+								$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+								$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+									"HEIGHT=\"16\" WIDTH=\"16\" >";
+								echo $modtype;
+								echo "</td>\n";
+								echo "<td align='left'><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+									$activity->name . "</a></td>\n";
+							}
+						}
+					} else if (($activity->modname == 'lesson')
+							&& ($activity->completion == 2)
+							&& $lessonstatus) {
+						if (isset($lessonstatus)) {
+							if ($lessonstatus == 'waitinggrade') {
+								echo "<tr><td align='center'>\n";
+								$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+								$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+									"HEIGHT=\"16\" WIDTH=\"16\" >";
+								echo $modtype;
+								echo "</td>\n";
+								echo "<td align='left'><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+									$activity->name . "</a></td>\n";
+							}
+						}
+					} else if (($activity->modname == 'journal')
+							&& ($activity->completion == 2)
+							&& $journalstatus) {
+						if (isset($journalstatus)) {
+							if ($journalstatus == 'waitinggrade') {
+								echo "<tr><td align='center'>\n";
+								$modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+								$modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+									"HEIGHT=\"16\" WIDTH=\"16\" >";
+								echo $modtype;
+								echo "</td>\n";
+								echo "<td align='left'><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+									$CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+									$activity->name . "</a></td>\n";
+							}
+						}
+					}
+				}
             }
         }
     }
@@ -385,7 +796,14 @@ if ($show == 'completed') {
             $data = $completion->get_data($activity, true, $menteeid, null);
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
-            if (($activitystate == 0) || ($activitystate == 1) || ($activitystate == 2) || ($activitystate == 3)) {
+			//  Get quiz, lesson, and journal status.
+			$quizstatus = block_fn_mentor_quiz_status($activity, $menteeid);
+			$lessonstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course);
+			$journalstatus = block_fn_mentor_journal_status($activity, $menteeid, $course);
+			//  Make sure these are graded items.
+			$grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid);
+            if ((($activitystate == 0) || ($activitystate == 1) || ($activitystate == 2) || ($activitystate == 3)) && (!empty($grade[$menteeid]->items))) {
+				//  Make sure these are graded items.
                 if (($activity->module == 1)
                         && ($activity->modname == 'assignment' || $activity->modname == 'assign')
                         && ($activity->completion == 2)
@@ -405,6 +823,61 @@ if ($show == 'completed') {
                         }
                     }
                 }
+				//  Get quiz, lesson, and journal statuses.
+				if (($activity->modname == 'quiz')
+                        && ($activity->completion == 2)
+                        && $quizstatus) {
+						if (isset($quizstatus)) {
+                            if ($quizstatus == 'saved') {
+                                echo "<tr><td align='center'>\n";
+                                $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+                                $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+                                "HEIGHT=\"16\" WIDTH=\"16\" >";
+                                echo $modtype;
+                                echo "</td>\n";
+                                echo "<td align='left'><a href='" .
+                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+                                $activity->name . "</a></td>\n";
+                            }
+                        }
+				}
+                if (($activity->modname == 'lesson')
+                        && ($activity->completion == 2)
+                        && $lessonstatus) {
+						if (isset($lessonstatus)) {
+                            if ($lessonstatus == 'saved') {
+                                echo "<tr><td align='center'>\n";
+                                $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+                                $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+                                "HEIGHT=\"16\" WIDTH=\"16\" >";
+                                echo $modtype;
+                                echo "</td>\n";
+                                echo "<td align='left'><a href='" .
+                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+                                $activity->name . "</a></td>\n";
+                            }
+                        }						
+				}
+				if (($activity->modname == 'journal')
+                        && ($activity->completion == 2)
+                        && $journalstatus) {
+						if (isset($journalstatus)) {
+                            if ($journalstatus == 'saved') {
+                                echo "<tr><td align='center'>\n";
+                                $modtype = $DB->get_field('modules', 'name', array('id' => $activity->module));
+                                $modicon = "<IMG BORDER=0 VALIGN=absmiddle SRC=\"$CFG->wwwroot/mod/$modtype/pix/icon.png\" ".
+                                "HEIGHT=\"16\" WIDTH=\"16\" >";
+                                echo $modtype;
+                                echo "</td>\n";
+                                echo "<td align='left'><a href='" .
+                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid'>$modicon</a><a href='" .
+                                $CFG->wwwroot . "/mod/$modtype/view.php?id=$data->coursemoduleid' style=\"padding-left:4px\">" .
+                                $activity->name . "</a></td>\n";
+                            }
+                        }						
+				}
             }
         }
     }
