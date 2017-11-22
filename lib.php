@@ -1054,8 +1054,39 @@ function block_fn_mentor_assign_plugin_config($assignmentid, $subtype = 'assigns
     return false;
 }
 
+function block_fn_mentor_forum_status($mod, $userid) {
+	// Add forum/hsuforum post that have not been graded to waiting for grade counts.
+	global $CFG, $DB, $SESSION;
+	require_once("$CFG->libdir/gradelib.php");
+	require_once($CFG->dirroot . '/mod/' . $mod->modname . '/lib.php');
+	if (isset($SESSION->completioncache)) {
+        unset($SESSION->completioncache);
+    }
+	if($mod->modname == 'forum' || $mod->modname == 'hsuforum') {
+		if (!($forum = $DB->get_record($mod->modname, array('id' => $mod->instance)))) {
+            return false;
+		}
+		$postfunction = $mod->modname.'_discussions_user_has_posted_in';
+		if (!$posts = $postfunction($forum->id, $userid)) {
+				return false;
+		} else {
+			$gradefunction = $mod->modname.'_get_user_grades';
+			$grade = $gradefunction($forum, $userid);
+			if(!empty($grade)) {	
+				return 'submitted';
+			} else if ($posts) {
+				return 'waitinggrade';
+			} else {
+				return false;
+			}
+		}
+	} else {
+		return false;
+	}
+}
+
 function block_fn_mentor_quiz_status($mod, $userid) {
-	//SRINDHL Add manually graded quizzes in the waiting for grade counts.
+	//Add manually graded quizzes in the waiting for grade counts.
 	 global $DB, $SESSION;
     if (isset($SESSION->completioncache)) {
         unset($SESSION->completioncache);
@@ -3015,7 +3046,7 @@ function block_fn_mentor_get_selected_courses($category, &$filtercourses) {
             block_fn_mentor_get_selected_courses($subcat, $course);
         }
     }
-};
+}
 
 function block_fn_mentor_embed ($text, $id) {
     return html_writer::tag('p',
@@ -3023,7 +3054,7 @@ function block_fn_mentor_embed ($text, $id) {
             'value' => $text, 'type' => 'button', 'id' => $id
         ))
     );
-};
+}
 
 function get_enrollment_dates($menteeid, $enrolledcourse) {
 	//  Add for enrollment period dates.
@@ -3181,7 +3212,40 @@ function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) 
 										++$waitingforgradeactivities;
 										break;
 								}
-						    } else if  ($modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true)) {	
+						    } else if ($modstatus = block_fn_mentor_forum_status($activity, $menteeid, true)) {
+								//  Check for special forum statuses.
+								switch ($modstatus) {
+									case 'submitted':
+										if ($instance->assessed == 0) {
+											// Graded
+											++$completedactivities;
+										} else if ($grade = $gradefunction($instance, $menteeid)) {
+											if ($item->gradepass > 0) {
+												if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+												   // Passed
+													++$completedactivities;
+												} else {
+													// Fail.
+													++$incompletedactivities;
+												}
+											} else {
+												// Graded
+												++$completedactivities;
+											}
+										}
+										break;
+
+									case 'saved':
+										// Saved
+										++$savedactivities;
+										break;
+
+									case 'waitinggrade':
+										// Waiting for grade
+										++$waitingforgradeactivities;
+										break;
+								}
+							} else if  ($modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true)) {	
 							//  Check for special quiz statuses.
 								switch ($modstatus) {
 									case 'submitted':
@@ -3281,6 +3345,7 @@ function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) 
 										break;
 								}
 							} else if ($grade) {
+								if($activity->modname == 'forum' || $activity->modname == 'hsuforum') {var_dump($grade);}
 								if ($item->gradepass > 0) {
 									if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
 										// Passed
@@ -3299,6 +3364,16 @@ function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) 
 								++$notattemptedactivities;
 							}
 							
+						} else if ($activity->modname == 'forum' || $activity->modname == 'hsuforum') {
+							// Count waiting for grade forums without a grade from grade function.
+							$modstatus = block_fn_mentor_forum_status($activity, $menteeid, true); 
+							   // Waiting for grade
+							   if($modstatus == 'waitinggrade') {
+								   ++$waitingforgradeactivities;
+							   } else {
+								   // Ungraded
+							       ++$notattemptedactivities;
+							   }
 						} else if ($activity->modname == 'quiz') {
 							// Count waiting for grade quizzes without a grade from grade function.
 							$modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true);
@@ -3697,7 +3772,45 @@ function block_fn_mentor_simplegradebook($course, $menteeuser, $modgradesarray) 
 													$simplegradebook[$key]['grade'][$i][$mod->id] = 'unmarked.gif';
 													break;
 											}
-                                        } else if($modstatus = block_fn_mentor_quiz_status($mod, $key, true)) {
+                                        } else if($modstatus = block_fn_mentor_forum_status($mod, $key, true)) {
+											// Check for forum status.
+										   switch ($modstatus) {
+												case 'submitted':
+													if ($instance->assessed == 0) {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													} else if ($grade) {
+														if ($item->gradepass > 0) {
+															if ($grade[$key]->rawgrade >= $item->gradepass) {
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif';// Passed.
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															} else {
+																// Fail.
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif';
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															}
+														} else {
+															// Graded (grade-to-pass is not set).
+															$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+															$simplegradebook[$key]['avg'][] = array(
+																'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+															);
+														}
+													}
+													break;
+
+												case 'saved':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'saved.gif';
+													break;
+
+												case 'waitinggrade':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'unmarked.gif';
+													break;
+											}
+										} else if($modstatus = block_fn_mentor_quiz_status($mod, $key, true)) {
 										   // Check for manually graded quizzes.
 										   switch ($modstatus) {
 												case 'submitted':
@@ -3815,28 +3928,28 @@ function block_fn_mentor_simplegradebook($course, $menteeuser, $modgradesarray) 
 										} else if ($grade) {
 											if ($item) {
 												
-													if ($item->gradepass > 0) {
-														if ($grade[$key]->rawgrade >= $item->gradepass) {
-															$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif'; // Passed.
-															$simplegradebook[$key]['avg'][] = array(
-																'grade' => $grade[$key]->rawgrade,
-																'grademax' => $item->grademax
-															);
-														} else {
-															$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif'; // Fail.
-															$simplegradebook[$key]['avg'][] = array(
-																'grade' => $grade[$key]->rawgrade,
-																'grademax' => $item->grademax
-															);
-														}
+												if ($item->gradepass > 0) {
+													if ($grade[$key]->rawgrade >= $item->gradepass) {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif'; // Passed.
+														$simplegradebook[$key]['avg'][] = array(
+															'grade' => $grade[$key]->rawgrade,
+															'grademax' => $item->grademax
+														);
 													} else {
-														// Graded (grade-to-pass is not set).
-														$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif'; // Fail.
 														$simplegradebook[$key]['avg'][] = array(
 															'grade' => $grade[$key]->rawgrade,
 															'grademax' => $item->grademax
 														);
 													}
+												} else {
+													// Graded (grade-to-pass is not set).
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													$simplegradebook[$key]['avg'][] = array(
+														'grade' => $grade[$key]->rawgrade,
+														'grademax' => $item->grademax
+													);
+												}
 												
 											}
 										} else {
