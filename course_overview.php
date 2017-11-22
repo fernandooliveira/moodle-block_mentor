@@ -31,13 +31,8 @@ $menteeid = optional_param('menteeid', 0, PARAM_INT);
 $courseid = optional_param('courseid', 0, PARAM_INT);
 $groupid  = optional_param('groupid', 0, PARAM_INT);
 
-// Array of functions to call for grading purposes for modules.
-$modgradesarray = array(
-    'assign' => 'assign.submissions.fn.php',
-    'quiz' => 'quiz.submissions.fn.php',
-    'assignment' => 'assignment.submissions.fn.php',
-    'forum' => 'forum.submissions.fn.php',
-);
+// Array of functions to call for grading purposes for modules. (- new function to add additional).
+$modgradesarray = get_graded_mods();
 
 require_login(null, false);
 
@@ -46,6 +41,7 @@ $isadmin   = has_capability('block/fn_mentor:manageall', context_system::instanc
 $ismentor  = block_fn_mentor_has_system_role($USER->id, get_config('block_fn_mentor', 'mentor_role_system'));
 $isteacher = block_fn_mentor_isteacherinanycourse($USER->id);
 $isstudent = block_fn_mentor_isstudentinanycourse($USER->id);
+$menteecanview = get_config('block_fn_mentor', 'menteecanview'); // Use the setting students can view for student views.									 
 
 $allownotes = get_config('block_fn_mentor', 'allownotes');
 
@@ -77,8 +73,13 @@ if ($isadmin) {
 }
 // Pick a mentee if not selected.
 if ((!$menteeid && $mentees) || (!in_array($menteeid, array_keys($mentees)))) {
+	// Account for student views 
+  if($isstudent && $menteecanview) {
+		$menteeid = $USER->id;
+   } else {	   
     $var = reset($mentees);
     $menteeid = $var->studentid;
+   }
 }
 
 if (($USER->id <> $menteeid) && !$isadmin && !in_array($menteeid, array_keys($mentees))) {
@@ -119,8 +120,9 @@ echo '<div id="mentee-course-overview-left">';
 
 $lastaccess = '';
 if ($menteeuser->lastaccess) {
+	 // Extra param for last access.
     $lastaccess .= get_string('lastaccess').get_string('labelsep', 'langconfig').
-        block_fn_mentor_format_time(time() - $menteeuser->lastaccess);
+        block_fn_mentor_format_time(time(), $menteeuser->lastaccess);
 } else {
     $lastaccess .= get_string('lastaccess').get_string('labelsep', 'langconfig').get_string('never');
 }
@@ -137,6 +139,9 @@ if ($isadmin) {
                AND gm.userid = ?
           ORDER BY g.name ASC";
     $groups = $DB->get_records_sql($sql, array('M', $USER->id));
+} else if ($isstudent) {
+	//  Account for student views.
+	$groups = '';
 }
 
 $groupmenu = array();
@@ -220,7 +225,6 @@ echo $groupmenuhtml.$studentmenuhtml.'
 if (!$enrolledcourses = enrol_get_all_users_courses($menteeid, false, 'id,fullname,shortname', 'fullname ASC')) {
     $enrolledcourses = array();
 }
-
 $filtercourses = array();
 
 if ($configcategory = get_config('block_fn_mentor', 'category')) {
@@ -303,6 +307,57 @@ echo '<div class="mentee-course-overview-block">
           </div>
       </div>';
 
+//  Add LEARNING PLANS.
+  // Requires mentor to have moodle/competency:planview set to allow in role. 
+if(get_config('core_competency', 'enabled')) {
+	$userid = optional_param('userid', $menteeuser->id, PARAM_INT);
+	$view = \core_competency\plan::can_read_user($userid);
+	$lp_url = new moodle_url('/admin/tool/lp/plans.php', array('userid' => $userid));
+	$plans = \core_competency\api::list_user_plans($userid);
+	$tooltip = 'View complete report for all learning plans.';
+	$reports = core_component::get_plugin_list('report');
+    $lpmonitoring= false;
+    if ($reports['lpmonitoring']) {
+		$lp_url = new moodle_url('/report/lpmonitoring/userreport.php', array('userid' => $menteeuser->id));
+		
+	}
+	if ($view) {
+		echo '<div class="mentee-course-overview-block">
+              <div class="mentee-course-overview-block-title">
+                  Learning Plans
+              </div>
+              <div class="fz_popup_wrapper">
+                  <a  href="'.$lp_url.'" data-toggle="tooltip" title="'.$tooltip.'"
+                  onclick="window.open(\''.$lp_url.'\', \'\', \'width=800,height=600,toolbar=no,location=no,menubar=no,copyhistory=no,'.
+                  'status=no,directories=no,scrollbars=yes,resizable=yes\'); return false;"
+                                        class="" ><img src="'.$CFG->wwwroot.'/blocks/fn_mentor/pix/popup_icon.gif"></a>
+              </div>
+              <div class="mentee-course-overview-block-content">';
+             
+			// Learning plan. 
+			$lp_count = count($plans);
+			foreach($plans as $plan) {
+				$exporter = new \core_competency\external\plan_exporter($plan, array('template' => $plan->get_template()));
+				$record = $exporter->export($OUTPUT);
+				$plan_record = '<div class="courselist"><img class="mentees-course-bullet" src="'.$CFG->wwwroot.'/blocks/fn_mentor/pix/b.gif"> <a href="' . $CFG->wwwroot .
+						'/admin/tool/lp/plan.php?id=' . $record->id . '">' . $record->name . '</a>';
+				if($record->duedate) {
+					$due_date = $record->duedateformatted;
+					$plan_record .= ' (Due: '.$due_date.')';
+				}
+				if($record->iscompleted) {
+					$plan_record .= ' <em>- Completed</em> ';
+				}
+				$plan_record .= '</div>';
+				
+				echo $plan_record;
+		
+			}
+			
+		echo     '</div>
+				</div>';
+	}
+}	
 // NOTES.
 if ($view = has_capability('block/fn_mentor:viewcoursenotes', context_system::instance()) && $allownotes) {
     echo '<div class="mentee-course-overview-block">
@@ -389,6 +444,8 @@ if ($enrolledcourses) {
             $progresshtml .= '<div class="overview-progress-list">' . $progressdata->content->icons[$key] .
                 $progressdata->content->items[$key] . '</div>';
         }
+		//  Add enrollment dates.
+		$enroldata = get_enrollment_dates($menteeid, $enrolledcourse->id);
 
         echo '<table class="mentee-course-overview-center_table block">';
         echo '<tr>';
@@ -399,7 +456,21 @@ if ($enrolledcourses) {
             $enrolledcourse->id . '\', \'\', \'width=800,height=600,toolbar=no,location=no,menubar=no,'.
             'copyhistory=no,status=no,directories=no,scrollbars=yes,resizable=yes\'); return false;" class="" >' .
             $course_fullname . '</a></div>';
+		// Enrollment dates.
+		if ($enroldata->enrolstart && $enroldata->enrolend){
+		echo '<div style="text-align:center"><small><b>'.get_string('enroldates', 'block_fn_mentor').':</b><br>'.date('n/j/Y', $enroldata->enrolstart).' - '.date('n/j/Y', $enroldata->enrolend).'</small></div>';
+		} else {
+			echo '<div style="text-align:center"><small><b>'.get_string('enroldates', 'block_fn_mentor').':</b><br>'.get_string('enroldatesnone', 'block_fn_mentor').'</small></div>';
+		}
+		// Add Session times.
 
+		$session = get_session_times($enrolledcourse->id);
+
+		if ($session){
+		echo '<div style="text-align:center"><small><b>'.get_string('sessions', 'block_fn_mentor').':</b><br>'.$session['meeting'].'</small></div>';
+		} else {
+			echo '<div style="text-align:center"><small><b>'.get_string('sessions', 'block_fn_mentor').':</b><br>'.get_string('sessionsnone', 'block_fn_mentor').'</small></div>';
+		}
         echo '<div class="overview-teacher">';
         echo '<table class="mentee-teacher-table">';
         // Course teachers.
@@ -421,8 +492,9 @@ if ($enrolledcourses) {
             $teacherlist = '';
             $teacherlabel = get_string('teacher', 'block_fn_mentor');
             foreach ($teachers as $teacher) {
+				// Extra param for last access.
                 $lastaccess = get_string('lastaccess') . get_string('labelsep', 'langconfig') .
-                    block_fn_mentor_format_time(time() - $teacher->lastaccess);
+                    block_fn_mentor_format_time(time(), $teacher->lastaccess);
                 $teacherlist .= block_fn_mentor_teacher_link ($teacher->id, $lastaccess);
             }
             if ($numofteachers > 1) {
@@ -455,8 +527,9 @@ if ($enrolledcourses) {
                 'blockname') : get_string('mentor', 'block_fn_mentor');
 
             foreach ($mentors as $mentor) {
+				// Extra param for last access.
                 $lastaccess = get_string('lastaccess') . get_string('labelsep', 'langconfig') .
-                    block_fn_mentor_format_time(time() - $mentor->lastaccess);
+                    block_fn_mentor_format_time(time(), $mentor->lastaccess);
                 $mentorlist .= block_fn_mentor_teacher_link($mentor->mentorid, $lastaccess);
             }
             echo '<tr><td class="mentee-teacher-table-label" valign="top"><span>';
@@ -506,9 +579,15 @@ if ($enrolledcourses) {
         }
         echo '</td>';
         echo '</tr>';
-
+		//  Add Progress bar.
+		echo '<tr>';
+		echo '<td>';
+		$progressbar = block_fn_mentor_print_activity_progress ($course , $menteeuser->id);
+		echo $progressbar;
+		echo '</td>';
+		echo '</tr>';
+		// End
         echo '</table>';
-
         echo '</td>';
         // Grade.
         echo '<td valign="top" style="height: 100%;" class="mentee-blue-border '.$completedcourseclass.'">';
