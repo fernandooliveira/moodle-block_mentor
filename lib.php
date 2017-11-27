@@ -1245,7 +1245,7 @@ function block_fn_mentor_journal_status($mod, $userid, $course) {
         }
 	    $entries = $DB->get_records('journal_entries', array(
             'journal' => $journal->id, 'userid' => $userid), 'id DESC', '*', 0, 1);
-		// Get any grades for the lesson. 
+		// Get any grades for the journal. 
 	   $grades = grade_get_grades($course->id, 'mod', 'journal', $journal->id, $userid);  
 	    if ($entries) {
 			$grade = reset($grades->items[0]->grades);
@@ -1372,11 +1372,46 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
                         }
                     }
                 }
-
-                if (!$gradeitem = $DB->get_record('grade_items',
-                    array('itemtype' => 'mod', 'itemmodule' => $mod->modname, 'iteminstance' => $mod->instance))) {
-                    continue;
+				
+				//  Remove not fully graded lessons.
+                if ($mod->modname == 'lesson') {
+					
+					if ($lessongrades = $DB->get_record('lesson_grades', array('lessonid' => $mod->instance, 'userid' => $studentid))) {
+						if ($lessongrades->grade >= 0) {
+							//Graded.
+							if ($attempts = $DB->get_records('lesson_attempts', array(
+								'lessonid' => $mod->instance, 'userid' => $studentid), 'id DESC', '*', 0, 1)
+							) {
+								if($attempts) {											
+									   $i = 0;
+									   $count = count($attempts);
+									   $attempt = array_values($attempts);
+									   $lessongrades->dontcount = false;
+									   for($i = 0; $i < $count; ++$i) {
+										 // check for ungraded lesson essay answers.
+										 $useranswer = $attempt[$i]->useranswer;
+										 if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false)) {
+											 if($answer = unserialize($useranswer)) {
+												if($answer->graded == 0) {
+													 $lessongrades->dontcount = true; 
+												} 
+											 }
+										 }
+										}
+									}
+									if ($lessongrades->dontcount == true) {
+										
+									   --$nogradeassignments;
+									}
+							}
+						}
+					}
                 }
+
+				if (!$gradeitem = $DB->get_record('grade_items',
+					array('itemtype' => 'mod', 'itemmodule' => $mod->modname, 'iteminstance' => $mod->instance))) {
+					continue;
+				}
 
                 $gradetotal['all_max'] += $gradeitem->grademax;
 
@@ -1401,6 +1436,7 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
             }
         }
     }
+
     if ($gradetotal['attempted_max']) {
         $attempted = round(($gradetotal['attempted_grade'] / $gradetotal['attempted_max']) * 100);
     } else {
@@ -1418,6 +1454,7 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
     $data->failed = 0;
     $data->timecompleted = 0;
 
+
     if ($courses) {
         foreach ($courses as $id => $value) {
             $sqlcourseaverage = "SELECT gg.id,
@@ -1428,7 +1465,9 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
                                      ON gi.id = gg.itemid
                                   WHERE gi.itemtype = ?
                                     AND gi.courseid = ?
-                                    AND gg.userid = ?";
+                                    AND gg.userid = ?
+									AND gi.gradetype <> '0'
+									AND gi.aggregationcoef <> '1%'";
             if ($courseaverage = $DB->get_record_sql($sqlcourseaverage, array('course', $id, $studentid))) {
                  //Prevent division by zero.
 				 if($courseaverage->rawgrademax > 0) {
@@ -1571,6 +1610,7 @@ function block_fn_mentor_quality_grade ($studentid, $courseid=0) {
                         }
                     }
                 }
+				
 
                 if (!$gradeitem = $DB->get_record('grade_items',
                     array('itemtype' => 'mod', 'itemmodule' => $mod->modname, 'iteminstance' => $mod->instance))) {
@@ -1619,10 +1659,10 @@ function block_fn_mentor_quality_grade ($studentid, $courseid=0) {
 
     if ($courses) {
 		foreach ($courses as $id => $value) {
-				$sqlcourseaverage = "SELECT gg.id, round(gg.finalgrade,2) as finalgrade, round(gg.rawgrademax,2) as rawgrademax
+				$sqlcourseaverage = "SELECT gg.id, gi.itemmodule as itemmodule, gi.iteminstance as iteminstance, round(gg.finalgrade,2) as finalgrade, round(gg.rawgrademax,2) as rawgrademax
 									   FROM {grade_grades} gg
 									   JOIN {grade_items} gi
-										 ON gg.itemid = gi.id
+										 ON  gi.id = gg.itemid
 									  WHERE gi.itemtype = ?
 										AND gi.courseid = ?
 										AND gg.userid = ?
@@ -1635,11 +1675,49 @@ function block_fn_mentor_quality_grade ($studentid, $courseid=0) {
 					$quality->finalgrade = 0;
 					$quality->rawgrademax = 0;
 					foreach ($records as $record) {
-						foreach ($record as $key => $value) {
-							if($key != 'id') {
-								$quality->$key += $value;
+						//  Don't count ungraded lessons in quality count.
+						if ($record->itemmodule == 'lesson') {
+							if ($lessongrades = $DB->get_records('lesson_grades', array(
+							 'lessonid' => $record->iteminstance, 'userid' => $studentid), 'id DESC')) {
+								$lessongrade = reset($lessongrades);
+								if ($lessongrade->grade >= 0) {
+									//Graded.
+									$attempts = $DB->get_records('lesson_attempts', array(
+									 'lessonid' => $record->iteminstance, 'userid' => $studentid), 'answerid DESC');
+									if($attempts) {											
+									   $i = 0;
+									   $count = count($attempts);
+									   $attempt = array_values($attempts);
+									   $lessongrade->dontcount = false;
+									   for($i = 0; $i < $count; ++$i) {
+										 // check for ungraded lesson essay answers.
+										 $useranswer = $attempt[$i]->useranswer;
+										 if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false)) {
+											 if($answer = unserialize($useranswer)) {
+												if($answer->graded == 0) {
+													 $lessongrade->dontcount = true; 
+												} 
+											 }
+										 }
+										}
+									}
+									if ($lessongrade->dontcount != true) {
+										// Graded.
+										$quality->finalgrade += $record->finalgrade;
+										$quality->rawgrademax += $record->rawgrademax;
+									}
+									
+								}
 							}
-						}
+						} else {
+							$quality->finalgrade += $record->finalgrade;
+							$quality->rawgrademax += $record->rawgrademax;
+						} 
+						/*foreach ($record as $key => $value) {
+							if($key != 'id') {
+									$quality->$key += $value;
+							} 
+						} */
 					};
 				if ($quality->rawgrademax == 0) {
 					$qualitygrades[$id] = 0;
@@ -3704,12 +3782,11 @@ function block_fn_mentor_simplegradebook($course, $menteeuser, $modgradesarray) 
 
                     $libfile = $CFG->dirroot . '/mod/' . $mod->modname . '/lib.php';
                     if (file_exists($libfile)) {
-						//  Check to see if this module is using their own get grades method or switch to the standard Moodle get grades function.					   
+						//  Check to see if this module is using their own get grades method or switch to the standard Moodle get grades function.	
+						require_once($libfile);						
 						$gradefunction = $mod->modname . "_get_user_grades";
 						if(!function_exists($gradefunction)) {
 							$gradefunction = "grade_get_grades";
-						} else {
-							require_once($libfile);
 						}
 					}
 					if($item) {
