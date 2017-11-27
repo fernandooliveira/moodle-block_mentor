@@ -22,7 +22,7 @@
 
 require_once($CFG->dirroot.'/mod/assignment/lib.php');
 require_once($CFG->dirroot.'/lib/completionlib.php');
-// Connect to an external DB for log files.
+//  Connect to an external DB for log files.
 require_once($CFG->dirroot.'/blocks/fn_mentor/classes/ext_db/db_connect.php');
 
 define('BLOCK_FN_MENTOR_MESSAGE_SEND_ALL', 0);
@@ -1690,15 +1690,15 @@ function block_fn_mentor_quality_grade ($studentid, $courseid=0) {
 									   $attempt = array_values($attempts);
 									   $lessongrade->dontcount = false;
 									   for($i = 0; $i < $count; ++$i) {
-										 // check for ungraded lesson essay answers.
-										 $useranswer = $attempt[$i]->useranswer;
-										 if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false)) {
-											 if($answer = unserialize($useranswer)) {
-												if($answer->graded == 0) {
-													 $lessongrade->dontcount = true; 
-												} 
+											 // check for ungraded lesson essay answers.
+											 $useranswer = $attempt[$i]->useranswer;
+											 if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false)) {
+												 if($answer = unserialize($useranswer)) {
+													if($answer->graded == 0) {
+														 $lessongrade->dontcount = true; 
+													} 
+												 }
 											 }
-										 }
 										}
 									}
 									if ($lessongrade->dontcount != true) {
@@ -1719,11 +1719,11 @@ function block_fn_mentor_quality_grade ($studentid, $courseid=0) {
 							} 
 						} */
 					};
-				if ($quality->rawgrademax == 0) {
-					$qualitygrades[$id] = 0;
-				} else {
-					$qualitygrades[$id] = ($quality->finalgrade / $quality->rawgrademax) * 100;
-				}
+					if ($quality->rawgrademax == 0) {
+						$qualitygrades[$id] = 0;
+					} else {
+						$qualitygrades[$id] = ($quality->finalgrade / $quality->rawgrademax) * 100;
+					}
 
 					if ($qualitygrades[$id] >= $passinggrade) {
 						$data->passed++;
@@ -1763,9 +1763,9 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
     $html = '';
     $courseaverage = block_fn_mentor_get_user_course_average($studentid, $courseid);
     $gradesummary = block_fn_mentor_grade_summary($studentid, $courseid);
-	//Add Quzlity Grade to print results.
+	// Add Quality Grade to print results.
 	$qualitysummary = block_fn_mentor_quality_grade ($studentid, $courseid);
-	// Use the configured passing grade.
+	//  Use the configured passing grade.
 	if (! $passinggrade = get_config('block_fn_mentor', 'passinggrade')) {
         $passinggrade = 50;
     }
@@ -1781,7 +1781,7 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
         $class = 'red';
         $nocoursetotalmsg = get_string('nocoursetotal', 'block_fn_mentor');
     } else {
-        // Use the configured passing grade.
+        //  Use the configured passing grade.
 		$class = ($gradesummary->courseaverage >= $passinggrade) ? 'green' : 'red';
         $nocoursetotalmsg = '';
     }
@@ -1793,7 +1793,7 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
         $html .= '<td colspan="2" class="overview-grade-right-warning" valign="middle">'.$warningimg.get_string('nocoursetotal', 'block_fn_mentor').'</td>';
         $html .= '</tr>';
     }
-	// add Quality grade to grade window.
+	//  add Quality grade to grade window.
 	$html .= '<tr>';
 	$html .= '<td class="overview-grade-left" valign="middle">'.get_string('qualitygrade', 'block_fn_mentor').':</td>';
     if ($courseaverage == false) {
@@ -2362,6 +2362,11 @@ function block_fn_mentor_last_activity ($studentid) {
     $lastsubmission = null;
     $lastattempt = null;
     $lastpost = null;
+	$lasthsupost = null;
+	$llastattempt = null;
+	$jlastentry = null;
+	$sclastattempt = null;
+	$ltilastsubmission = null;
 
     // Assign.
     $sqlassign = "SELECT s.id,
