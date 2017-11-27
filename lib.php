@@ -2417,7 +2417,7 @@ function block_fn_mentor_last_activity ($studentid) {
 
     if ($entries = $DB->get_records_sql($sqljournal, array($studentid))) {
         $entry = reset($entries);
-        $jlastentry = round(((time() - $entry->completed) / (24 * 60 * 60)), 0);
+        $jlastentry = round(((time() - $entry->modified) / (24 * 60 * 60)), 0);
     }
 
     // Forum.
