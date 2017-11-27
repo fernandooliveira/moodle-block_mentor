@@ -1375,34 +1375,38 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
 				
 				//  Remove not fully graded lessons.
                 if ($mod->modname == 'lesson') {
-					
-					if ($lessongrades = $DB->get_record('lesson_grades', array('lessonid' => $mod->instance, 'userid' => $studentid))) {
-						if ($lessongrades->grade >= 0) {
-							//Graded.
-							if ($attempts = $DB->get_records('lesson_attempts', array(
-								'lessonid' => $mod->instance, 'userid' => $studentid), 'id DESC', '*', 0, 1)
-							) {
-								if($attempts) {											
-									   $i = 0;
-									   $count = count($attempts);
-									   $attempt = array_values($attempts);
-									   $lessongrades->dontcount = false;
-									   for($i = 0; $i < $count; ++$i) {
-										 // check for ungraded lesson essay answers.
-										 $useranswer = $attempt[$i]->useranswer;
-										 if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false)) {
-											 if($answer = unserialize($useranswer)) {
-												if($answer->graded == 0) {
-													 $lessongrades->dontcount = true; 
-												} 
-											 }
-										 }
-										}
+					if($lesson = $DB->get_record('lesson', array('id' => $mod->instance))) {
+						if ($lessongrades = $DB->get_records('lesson_grades', array('lessonid' => $lesson->id, 'userid' => $studentid), 'id DESC')) {
+							foreach($lessongrades as $key =>$gradeobj) {
+								if ($gradeobj->grade >= 0) {
+									//Graded.
+									if ($attempts = $DB->get_records('lesson_attempts', array(
+										'lessonid' => $lesson->id, 'userid' => $studentid), 'id DESC', '*', 0, 1)
+									) {
+										if($attempts) {											
+											   $i = 0;
+											   $count = count($attempts);
+											   $attempt = array_values($attempts);
+											   $lessongrade = new stdClass;
+											   $lessongrade->dontcount = false;
+											   for($i = 0; $i < $count; ++$i) {
+												 // check for ungraded lesson essay answers.
+												 $useranswer = $attempt[$i]->useranswer;
+												 if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false)) {
+													 if($answer = unserialize($useranswer)) {
+														if($answer->graded == 0) {
+															 $lessongrade->dontcount = true; 
+														} 
+													 }
+												 }
+												}
+											}
+											if ($lessongrade->dontcount == true) {
+												
+											   --$nogradeassignments;
+											}
 									}
-									if ($lessongrades->dontcount == true) {
-										
-									   --$nogradeassignments;
-									}
+								}
 							}
 						}
 					}
