@@ -1504,6 +1504,10 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
             $data->courseaverage = round($coursegrades[$courseid]);
         } else {
             $data->courseaverage = 0;
+			//  If no course grade then don't show a percentage.
+			if ($courseaverage->rawgrademax == 0) {
+				$data->courseaverage = 'N/A';
+			}
         }
 
         $sqlactivity = "SELECT gi.id,
@@ -1752,6 +1756,10 @@ function block_fn_mentor_quality_grade ($studentid, $courseid=0) {
             $data->courseaverage = round($qualitygrades[$courseid]);
         } else {
             $data->courseaverage = 0;
+			//  If no course grade then don't show a percentage.
+			if ($quality->rawgrademax == 0) {
+				$data->courseaverage = 'N/A';
+			}
         }
 	}
 
@@ -1787,7 +1795,11 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
 		$class = ($gradesummary->courseaverage >= $passinggrade) ? 'green' : 'red';
         $nocoursetotalmsg = '';
     }
-    $html .= '<td class="overview-grade-right '.$class.'" valign="middle">'.$gradesummary->courseaverage.'%</td>';
+	//  If no course grade then don't show a percentage.
+    if (is_numeric($gradesummary->courseaverage)){
+		$gradesummary->courseaverage = $gradesummary->courseaverage . '%';
+	}
+	$html .= '<td class="overview-grade-right '.$class.'" valign="middle">'.$gradesummary->courseaverage.'</td>';
     $html .= '</tr>';
     if ($courseaverage == false) {
         $warningimg = '<img class="actionicon" width="16" height="16" alt="" src="'.$OUTPUT->pix_url('i/warning', '').'"> ';
@@ -1805,7 +1817,11 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
         $class = ($qualitysummary->courseaverage >= $passinggrade) ? 'green' : 'red';
         $nocoursetotalmsg = '';
     }
-    $html .= '<td class="overview-grade-right '.$class.'" valign="middle">'.$qualitysummary->courseaverage.'%</td>';
+	//  If no course grade then don't show a percentage.
+	if (is_numeric($qualitysummary->courseaverage)){
+		$qualitysummary->courseaverage = $qualitysummary->courseaverage . '%';
+	}
+    $html .= '<td class="overview-grade-right '.$class.'" valign="middle">'.$qualitysummary->courseaverage.'</td>';
 	$html .= '</tr>';
 	
     $html .= '</table>';
