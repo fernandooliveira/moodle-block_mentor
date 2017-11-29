@@ -1505,7 +1505,7 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
         } else {
             $data->courseaverage = 0;
 			//  If no course grade then don't show a percentage.
-			if ($courseaverage->rawgrademax == 0) {
+			if ($data->all == 0) {
 				$data->courseaverage = 'N/A';
 			}
         }
@@ -1757,7 +1757,7 @@ function block_fn_mentor_quality_grade ($studentid, $courseid=0) {
         } else {
             $data->courseaverage = 0;
 			//  If no course grade then don't show a percentage.
-			if ($quality->rawgrademax == 0) {
+			if ($data->all == 0) {
 				$data->courseaverage = 'N/A';
 			}
         }
@@ -1774,7 +1774,7 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
     $courseaverage = block_fn_mentor_get_user_course_average($studentid, $courseid);
     $gradesummary = block_fn_mentor_grade_summary($studentid, $courseid);
 	// Add Quality Grade to print results.
-	$qualitysummary = block_fn_mentor_quality_grade ($studentid, $courseid);
+	$qualitysummary = block_fn_mentor_quality_grade($studentid, $courseid);
 	//  Use the configured passing grade.
 	if (! $passinggrade = get_config('block_fn_mentor', 'passinggrade')) {
         $passinggrade = 50;
