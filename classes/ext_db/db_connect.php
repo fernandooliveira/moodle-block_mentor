@@ -20,7 +20,7 @@
  * Defines the db connection used by fn_mentor
  *
  * @package    block_fn_mentor
- * @author     Sheilla Rindahl <snorton@erdc.k12.mn.us>
+ * @author     Sheilla Rindahl <srindahl@erdc.k12.mn.us>
  * @copyright  2016 cmERDC
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
@@ -139,7 +139,7 @@ class Database {
         return $sql;
     }
 	
-	/*SRINDAHL add external database connection for
+	/* Add external database connection for
 	 * displaying the session times for courses.
 	*/
 	function get_extdb_sessions($enrolledcourse) {
