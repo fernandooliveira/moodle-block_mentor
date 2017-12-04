@@ -138,7 +138,7 @@ if ($completion->is_enabled() && !empty($completion)) {
 									break;
 							}
 						
-					} else if ($modstatus = block_fn_mentor_forum_status($activity, $$menteeid, true)) {
+					} else if ($modstatus = block_fn_mentor_forum_status($activity, $menteeid, true)) {
                         //  Check for forum posts for waiting grade count.
 						switch ($modstatus) {
 							case 'submitted':
@@ -432,20 +432,18 @@ if (($show == 'completed' || $show == 'incompleted' || $show == 'draft'
     echo "</div>";
 }
 
-
 if ($show == 'completed') {
     if ($activities) { 
         foreach ($activities as $activity) {
             if (!$activity->visible) {
                 continue;
             }
-
             $data = $completion->get_data($activity, false, $menteeid, null);
-
-            $activitystate = $data->completionstate;
-			// Make sure this is an actual graded item by getting the gradebook entries.
-			$grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid);
-			if (!empty($grade[$menteeid]->items)) {
+            $activitystate = $data->completionstate;			
+            $grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid);
+			$usergrade = $grade[$menteeid]->items[0]->grades[$menteeid];
+			//  Make sure these are graded items.
+			if (!empty($grade[$menteeid]->items) && $usergrade->grade != NULL) {
 				// Check no grade assignments.
 				$shownogradeassignment = false;
 				if ($activity->modname == 'assign') { 
@@ -565,8 +563,9 @@ if ($show == 'completed') {
 			$item = $DB->get_record('grade_items',
             array("itemtype" => 'mod', "itemmodule" => $activity->modname, "iteminstance" => $activity->instance));
             $grade[$menteeid] = grade_get_grades($course->id, 'mod', $activity->modname, $activity->instance, $menteeid);
+			$usergrade = $grade[$menteeid]->items[0]->grades[$menteeid];
 			//  Make sure these are graded items.
-			if ($activitystate == 3 && (!empty($grade[$menteeid]->items))) {
+			if ($activitystate == 3 && $usergrade->grade != NULL) {
 				
                 if (($activity->module == 1)
                         && ($activity->modname == 'assignment' || $activity->modname == 'assign')
@@ -770,6 +769,7 @@ if ($show == 'completed') {
             if (!$activity->visible) {
                 continue;
             }
+			//var_dump($activity->id);
             $data = $completion->get_data($activity, true, $menteeid, null);
             $activitystate = $data->completionstate;
             $assignmentstatus = block_fn_mentor_assignment_status($activity, $menteeid);
