@@ -900,7 +900,6 @@ function block_fn_mentor_assignment_status($mod, $userid) {
     if (isset($SESSION->completioncache)) {
         unset($SESSION->completioncache);
     }
-
     if ($mod->modname == 'assignment') {
         if (!($assignment = $DB->get_record('assignment', array('id' => $mod->instance)))) {
             return false;
@@ -1196,7 +1195,6 @@ function block_fn_mentor_lesson_status($mod, $userid, $course) {
 			   }
 				if($timer->completed == 1) {					
 					if ($grade->grade) {
-						//var_dump($grade);
 						$attempts = $DB->get_records('lesson_attempts', array(
 						   'lessonid' => $lesson->id, 'userid' => $userid), 'answerid DESC');
 						if($attempts) {
@@ -3446,7 +3444,6 @@ function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) 
 										break;
 								}
 							} else if ($grade) {
-								if($activity->modname == 'forum' || $activity->modname == 'hsuforum') {var_dump($grade);}
 								if ($item->gradepass > 0) {
 									if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
 										// Passed
@@ -3833,7 +3830,6 @@ function block_fn_mentor_simplegradebook($course, $menteeuser, $modgradesarray) 
                                     if (strpos($gradefunction, $mod->modname) !== false) {
 									//  Run through special cases first before applying standard grade checks.	
 										$grade = $gradefunction($instance, $key);
-										
 										if ($modstatus = block_fn_mentor_assignment_status($mod, $key, true)) {
 											
 											switch ($modstatus) {

@@ -138,11 +138,11 @@ if ($completion->is_enabled() && !empty($completion)) {
 									break;
 							}
 						
-					} else if ($modstatus = block_fn_mentor_forum_status($activity, $userid, true)) {
+					} else if ($modstatus = block_fn_mentor_forum_status($activity, $$menteeid, true)) {
                         //  Check for forum posts for waiting grade count.
 						switch ($modstatus) {
 							case 'submitted':
-								if ($instance->grade == 0) {
+								if ($instance->assessed == 0) {
 									// Graded
 									++$completedactivities;
 								} else if ($grade = $gradefunction($instance, $menteeid)) {
@@ -489,7 +489,7 @@ if ($show == 'completed') {
 					}
 				}
 				// Check no grade journal.
-				$shownogradelesson = false;
+				$shownogradejournal = false;
 				if ($activity->modname == 'journal') { 
 					if ($journal = $DB->get_record('journal', array('id' => $activity->instance))) {
 						$journalmodstatus = block_fn_mentor_journal_status($activity, $menteeid, $course, true);
