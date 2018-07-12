@@ -33,20 +33,20 @@ $courseid      = optional_param('courseid', 0, PARAM_INT);
 $groupid  = optional_param('groupid', 0, PARAM_INT);
 $navpage       = optional_param('page', 'overview', PARAM_TEXT);
 
-// Array of functions to call for grading purposes for modules.
-$modgradesarray = array(
-    'assign' => 'assign.submissions.fn.php',
-    'quiz' => 'quiz.submissions.fn.php',
-    'assignment' => 'assignment.submissions.fn.php',
-    'forum' => 'forum.submissions.fn.php',
-);
+// Array of functions to call for grading purposes for modules. New mod array function for extra mods.
+$modgradesarray = get_graded_mods();
 
 $allownotes = get_config('block_fn_mentor', 'allownotes');
 
 require_login(null, false);
 
 // COURSES.
-if (!$enrolledcourses = enrol_get_all_users_courses($menteeid, 'id,fullname,shortname', null, 'fullname ASC')) {
+if($enrollmenttypeconfig = get_config('block_fn_mentor', 'includecurrentenrollments')) {
+	$enrollmenttype = true;
+} else {
+	$enrollmenttype = false;
+}
+if (!$enrolledcourses = enrol_get_all_users_courses($menteeid, $enrollmenttype, 'id,fullname,shortname', null, 'fullname ASC')) {
     print_error('error_enrolled_course', 'block_fn_mentor');
 }
 
@@ -100,7 +100,9 @@ if (! isset($enrolledcourses[$courseid])) {
     $courseid = $ecourse->id;
 }
 if ($courseid) {
-    $course = $DB->get_record('course', array('id' => $courseid), '*', MUST_EXIST);
+   //$course = $DB->get_record('course', array('id' => $courseid), '*', MUST_EXIST);
+   //  Need course object, use Moodle standard function for proper format.
+   $course = get_course($courseid);
 } else {
     print_error('unspecifycourseid', 'error');
 }
@@ -110,6 +112,7 @@ $isadmin   = has_capability('block/fn_mentor:manageall', context_system::instanc
 $ismentor  = block_fn_mentor_has_system_role($USER->id, get_config('block_fn_mentor', 'mentor_role_system'));
 $isteacher = block_fn_mentor_isteacherinanycourse($USER->id);
 $isstudent = block_fn_mentor_isstudentinanycourse($USER->id);
+$menteecanview = get_config('block_fn_mentor', 'menteecanview'); // Use the setting students can view 										 
 
 if ($allownotes && $ismentor) {
     $allownotes = true;
@@ -139,8 +142,13 @@ if ($isadmin) {
 
 // Pick a mentee if not selected.
 if ((!$menteeid && $mentees) || (!in_array($menteeid, array_keys($mentees)))) {
+	// Account for student views 
+	if($isstudent && $menteecanview) {
+		$menteeid = $USER->id;
+   } else {	   
     $var = reset($mentees);
     $menteeid = $var->studentid;
+   }
 }
 
 $menteeuser = $DB->get_record('user', array('id' => $menteeid), '*', MUST_EXIST);
@@ -184,8 +192,9 @@ echo '<div id="mentee-course-overview-left">';
 
 $lastaccess = '';
 if ($menteeuser->lastaccess) {
+	 // Extra param for last access.
     $lastaccess .= get_string('lastaccess').get_string('labelsep', 'langconfig').
-        block_fn_mentor_format_time(time() - $menteeuser->lastaccess);
+        block_fn_mentor_format_time(time(), $menteeuser->lastaccess);
 } else {
     $lastaccess .= get_string('lastaccess').get_string('labelsep', 'langconfig').get_string('never');
 }
@@ -193,7 +202,7 @@ if ($menteeuser->lastaccess) {
 // Groups menu.
 if ($isadmin) {
     $groups = $DB->get_records('block_fn_mentor_group', null, 'name ASC');
-} else if ($ismentor) {
+} else if ($ismentor || $isstudent) { //  Added $isstudent for student views
     $sql = "SELECT g.id, g.name
               FROM {block_fn_mentor_group} g
               JOIN {block_fn_mentor_group_mem} gm
@@ -350,12 +359,12 @@ echo '<div class="mentee-course-overview-center-course-menu">
           <table class="mentee-menu">
             <tr>
                 <td'.$classoverview.'><a href="'.$CFG->wwwroot.'/blocks/fn_mentor/course_overview_single.php?menteeid='.
-    $menteeid.'&groupid=' . $groupid.'&courseid='.$courseid.'">'.get_string('overview', 'block_fn_mentor').'</a></td>
+    $menteeid.'&groupid=' . $groupid.'&courseid='.$courseid.'">Overview</a></td>
                 <td'.$classgrade.'><a href="'.$CFG->wwwroot.'/blocks/fn_mentor/course_overview_single.php?page=grade&menteeid='.
-    $menteeid.'&groupid=' . $groupid.'&courseid='.$courseid.'">'.get_string('grades', 'block_fn_mentor').'</a></td>
+    $menteeid.'&groupid=' . $groupid.'&courseid='.$courseid.'">Grades</a></td>
                 <td'.$classactivity.'><a href="'.$CFG->wwwroot.
     '/blocks/fn_mentor/course_overview_single.php?page=outline&menteeid='.
-    $menteeid.'&groupid=' . $groupid.'&courseid='.$courseid.'">'.get_string('activity', 'block_fn_mentor').'</a></td>';
+    $menteeid.'&groupid=' . $groupid.'&courseid='.$courseid.'">Activity</a></td>';
 
 echo '</tr>
           </table>
@@ -378,11 +387,44 @@ if ($navpage == 'overview') {
         $progress .= '<div class="overview-progress-list">'.$progressdata->content->icons[$key] .
             $progressdata->content->items[$key] . '</div>';
     }
+	//  Get enrollment dates.
+	$enroldata = get_enrollment_dates($menteeid, $enrolledcourse->id);
 
     echo '<table class="mentee-course-overview-center_table">';
     echo '<tr>';
 
     echo '<td valign="top" class="mentee-grey-border">';
+	// Enrollment dates.
+	if ($enroldata->enrolstart && $enroldata->enrolend){
+	echo '<div class="overview-teacher">';
+	echo '<table class="mentee-teacher-table">';
+	echo '<tr><td class="mentee-teacher-table-label" valign="top"><span>'.get_string('enroldates', 'block_fn_mentor').':</span></td>';
+	echo '<td valign="top"><small>'.date('n/j/Y', $enroldata->enrolstart).' - '.date('n/j/Y', $enroldata->enrolend).'</small></td>';
+	echo '</tr>';
+	echo '</table>';
+	echo '</div>';
+	}
+	// Session times. (External DB).
+
+	$session = get_session_times($enrolledcourse->id);
+
+	if ($session){
+		echo '<div class="overview-teacher">';
+		echo '<table class="mentee-teacher-table">';
+		echo '<tr><td class="mentee-teacher-table-label" valign="top"><span>'.get_string('sessions', 'block_fn_mentor').':</span></td>';
+		echo '<td valign="top"><small>'.$session['meeting'].'</small></td>';
+		echo '</tr>';
+		echo '</table>';
+		echo '</div>';
+	} else {
+		echo '<div class="overview-teacher">';
+		echo '<table class="mentee-teacher-table">';
+		echo '<tr><td class="mentee-teacher-table-label" valign="top"><span>'.get_string('sessions', 'block_fn_mentor').':</span></td>';
+		echo '<td valign="top"><small>'.get_string('sessionsnone', 'block_fn_mentor').'</small></td>';
+		echo '</tr>';
+		echo '</table>';
+		echo '</div>';
+	}
     echo '<div class="overview-teacher">';
     echo '<table class="mentee-teacher-table">';
     // Course teachers.
@@ -404,8 +446,9 @@ if ($navpage == 'overview') {
             get_string('teacher', 'block_fn_mentor').': </span></td><td valign="top">';
 
         foreach ($teachers as $teacher) {
+			 // Extra param for last access.
             $lastaccess = get_string('lastaccess').get_string('labelsep', 'langconfig').
-                block_fn_mentor_format_time(time() - $teacher->lastaccess);
+                block_fn_mentor_format_time(time(), $teacher->lastaccess);
 
             echo '<div><a onclick="window.open(\''.$CFG->wwwroot.'/user/profile.php?id='.$teacher->id.
                 '\', \'\', \'width=800,height=600,toolbar=no,location=no,menubar=no,copyhistory=no,status=no,directories=no,'.
@@ -430,8 +473,9 @@ if ($navpage == 'overview') {
             'blockname') : get_string('mentor', 'block_fn_mentor').': ';
         echo '</span></td><td valign="top">';
         foreach ($mentors as $mentor) {
+			 // Extra param for last access.
             $lastaccess = get_string('lastaccess').get_string('labelsep',
-                    'langconfig'). block_fn_mentor_format_time(time() - $mentor->lastaccess);
+                    'langconfig'). block_fn_mentor_format_time(time(), $mentor->lastaccess);
 
             echo '<div><a onclick="window.open(\''.$CFG->wwwroot.'/user/profile.php?id='.$mentor->mentorid.
                 '\', \'\', \'width=620,height=450,toolbar=no,location=no,menubar=no,copyhistory=no,status=no,directories=no,'.
@@ -463,6 +507,14 @@ if ($navpage == 'overview') {
     echo $progress;
     echo '</td>';
     echo '</tr>';
+	//  Progress bar.
+		echo '<tr>';
+		echo '<td>';
+		$progressbar = block_fn_mentor_print_activity_progress ($course , $menteeuser->id);
+		echo $progressbar;
+		echo '</td>';
+		echo '</tr>';
+		// End
     echo '</table>';
 
 
@@ -489,7 +541,9 @@ if ($navpage == 'overview') {
     echo '</tr>';
     echo '</table>';
 
-    echo '</div>'; // Mentee course overview center course.
+    echo '</div>'; 
+	// Mentee course overview center course.
+	
 
     // SIMPLE GRADE BOOK.
     echo '<table class="simple-gradebook">';
@@ -505,7 +559,6 @@ if ($navpage == 'overview') {
     );
     echo '<div class="tablecontainer">';
     $gradebook = reset($simplegradebook);
-
     if (isset($gradebook['grade'])) {
         // TABLE.
         echo "<table class='simplegradebook'>";
@@ -546,15 +599,18 @@ if ($navpage == 'overview') {
             $grademaxtot = 0;
             $avg = 0;
 
-            if (!isset($studentreport['avg'])) {
+			//  Moved to align table view.								
+			/*if (!isset($studentreport['avg'])) {
                 echo '<td class="red"> - </td>';
-            }
-
+            }*/							
             foreach ($studentreport['grade'] as $sgrades) {
                 foreach ($sgrades as $sgrade) {
                     echo '<td class="'.$studentclass.' icon">'.'<img src="' . $CFG->wwwroot . '/blocks/fn_mentor/pix/'.
                         $sgrade.'" height="16" width="16" alt="">'.'</td>';
                 }
+            }
+			if (!isset($studentreport['avg'])) {
+                echo '<td class="red"> - </td>';
             }
             echo '</tr>';
         }

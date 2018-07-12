@@ -1,5 +1,5 @@
 <?php
-// This file is part of Moodle - http://moodle.org/
+// This file is part of Moodle - http://moodle.org/ 
 //
 // Moodle is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,6 +22,8 @@
 
 require_once($CFG->dirroot.'/mod/assignment/lib.php');
 require_once($CFG->dirroot.'/lib/completionlib.php');
+//  Connect to an external DB for log files.
+require_once($CFG->dirroot.'/blocks/fn_mentor/classes/ext_db/db_connect.php');
 
 define('BLOCK_FN_MENTOR_MESSAGE_SEND_ALL', 0);
 define('BLOCK_FN_MENTOR_MESSAGE_SEND_APPENDED', 1);
@@ -866,13 +868,39 @@ function block_fn_mentor_render_mentees_by_student($menteeid) {
     return $html;
 }
 
+/* Add modules to check for course_overview.php,
+ * course_overview_single.php, simple_gradebook.php,
+ * listactivities.php, lib functions to make it easier
+ * to add extra mods.
+ * @author Sheilla Rindahl <snorton@erdc.k12.mn.us>
+ * @return array modlist
+ */
+function get_graded_mods() {
+	$modlist = array(
+    'assign' => 'assign.submissions.fn.php',
+    'quiz' => 'quiz.submissions.fn.php',
+    'assignment' => 'assignment.submissions.fn.php',
+    'forum' => 'forum.submissions.fn.php',
+	// Add extra Moodle mods 
+	'lesson' => 'lesson.submissions.fn.php',
+	'scorm' => 'scorm.submissions.fn.php',
+	'lti' => 'lti.submissions.fn.php',
+	// Add extra Moodle plugins graded... 
+	// The below functions are used fn_marking and need to be developed if using fn_marking plugin.
+	'hsuforum' => 'hsuforum.submissions.fn.php',
+	'journal' => 'journal.submissions.fn.php',
+	'hvp' => 'hvp.submissions.fn.php',
+	'collaborate' => 'collaborate.submissions.fn.php',
+    );
+	return $modlist;
+}
+
 function block_fn_mentor_assignment_status($mod, $userid) {
     global $CFG, $DB, $SESSION;
 
     if (isset($SESSION->completioncache)) {
         unset($SESSION->completioncache);
     }
-
     if ($mod->modname == 'assignment') {
         if (!($assignment = $DB->get_record('assignment', array('id' => $mod->instance)))) {
             return false;
@@ -1026,6 +1054,254 @@ function block_fn_mentor_assign_plugin_config($assignmentid, $subtype = 'assigns
     return false;
 }
 
+function block_fn_mentor_forum_status($mod, $userid) {
+	// Add forum/hsuforum post that have not been graded to waiting for grade counts.
+	global $CFG, $DB, $SESSION;
+	require_once("$CFG->libdir/gradelib.php");
+	require_once($CFG->dirroot . '/mod/' . $mod->modname . '/lib.php');
+	if (isset($SESSION->completioncache)) {
+        unset($SESSION->completioncache);
+    }
+	if($mod->modname == 'forum' || $mod->modname == 'hsuforum') {
+		if (!($forum = $DB->get_record($mod->modname, array('id' => $mod->instance)))) {
+            return false;
+		}
+		$postfunction = $mod->modname.'_discussions_user_has_posted_in';
+		if (!$posts = $postfunction($forum->id, $userid)) {
+				return false;
+		} else {
+			$gradefunction = $mod->modname.'_get_user_grades';
+			$grade = $gradefunction($forum, $userid);
+			if(!empty($grade)) {	
+				return 'submitted';
+			} else if ($posts) {
+				return 'waitinggrade';
+			} else {
+				return false;
+			}
+		}
+	} else {
+		return false;
+	}
+}
+
+function block_fn_mentor_quiz_status($mod, $userid) {
+	//Add manually graded quizzes in the waiting for grade counts.
+	 global $DB, $SESSION;
+    if (isset($SESSION->completioncache)) {
+        unset($SESSION->completioncache);
+    }
+    if ($mod->modname == 'quiz') {
+		
+		if (!($quiz = $DB->get_record('quiz', array('id' => $mod->instance)))) {
+            return false;
+        }
+	    $attempts = $DB->get_records('quiz_attempts', array(
+            'quiz' => $quiz->id, 'userid' => $userid), 'attempt DESC', '*', 0, 1);
+	    if ($attempts) {
+			foreach($attempts as $id=>$attempt) {
+				
+				if ($attemptisgraded = $DB->get_records('quiz_grades', array(
+					'quiz' => $quiz->id, 'userid' => $userid))) {
+
+					$attemptisgraded = reset($attemptisgraded);
+					if ($attemptisgraded->grade > -1) {
+						if (($attempt->timemodified > $attemptisgraded->timemodified)) {
+							$graded = false;
+						} else {
+							$graded = true;
+						}
+					} else {
+						$graded = false;
+					}
+				} else {
+					$graded = false;
+				}
+							
+						// No grade assignments.
+						if (($quiz->grade == 0) && ($attempt->state == 'finished')) {
+							return 'submitted';
+						}
+						
+						if ($attempt->sumgrades === NULL) {
+							if ($attempt->state == 'abandoned') {
+								return false;
+							} elseif ($attempt->state == 'overdue') {
+								return false;
+							} elseif ($attempt->state == 'inprogress') {
+								return 'saved';
+							} elseif ($attempt->state == 'finished') {
+								return 'waitinggrade';
+							}
+						} else {
+							if ($attempt->state == 'inprogress') {
+								if ($graded) {
+									return 'submitted';
+								} else {
+									return 'saved';
+								}
+							} elseif ($attempt->state == 'finished') {
+								if ($graded) {
+									return 'submitted';
+								}
+							}
+						}
+			}
+		} else {
+			return false;
+		}
+	} else {
+		return false;
+	}
+}
+
+
+function block_fn_mentor_lesson_status($mod, $userid, $course) {
+	//SRINDHL Add manually graded essays in the waiting for grade counts.
+	 global $CFG, $DB, $SESSION;
+	 require_once("$CFG->libdir/gradelib.php");
+    if (isset($SESSION->completioncache)) {
+        unset($SESSION->completioncache);
+    }
+    if ($mod->modname == 'lesson') {
+		if (!($lesson = $DB->get_record('lesson', array('id' => $mod->instance)))) {
+            return false;
+        }	
+        // Check to see if it an incomplete attempt.
+        $sql = "SELECT *
+                      FROM {lesson_timer}
+                     WHERE lessonid = :lessonid
+                       AND userid = :userid
+                     ORDER by starttime desc";
+        $params = array('lessonid' => $lesson->id, 'userid' => $userid);	
+        $timer = $DB->get_record_sql($sql, $params, IGNORE_MULTIPLE);	
+	   // Get any grades for the lesson. 
+	   $grades = grade_get_grades($course->id, 'mod', 'lesson', $lesson->id, $userid);  
+	   if (((empty($grades->items[0]->grades)) && (!$timer)) || ($lesson->practice == 1)) { 	   
+		   return false;
+	   } else if ((empty($grades->items[0]->grades)) && (!empty($timer))) {			  
+		 return 'saved';
+	   } else {
+            // Detrmine the status.
+            if ($timer) {
+
+               $grade = reset($grades->items[0]->grades);
+				// No grade lessons.
+			   if (($lesson->grade == 0) || ($lesson->practice == 1)) {
+				   if($timer->completed == 1) {
+					   return 'submitted';
+				   } else {
+					   return 'saved';
+				   }
+			   }
+				if($timer->completed == 1) {					
+					if ($grade->grade) {
+						$attempts = $DB->get_records('lesson_attempts', array(
+						   'lessonid' => $lesson->id, 'userid' => $userid), 'answerid DESC');
+						if($attempts) {
+						   $i = 0;
+						   $count = count($attempts);
+						   $attempt = array_values($attempts);
+							for($i = 0; $i < $count; ++$i) {
+								
+								// check for ungraded lesson essay answers.
+								$useranswer = $attempt[$i]->useranswer;
+								if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false))
+								if($answer = unserialize($useranswer)) {
+									if($answer->graded == 0) {
+										return 'waitinggrade';   
+									} 
+								}
+								continue;
+							}
+							
+						} 
+						return 'submitted';
+		            } 
+			    } else {
+				       return 'saved';
+		        }
+			} else {
+				return false;
+			}
+		}
+		return false;
+	}
+		return false;
+	
+}
+
+function block_fn_mentor_journal_status($mod, $userid, $course) {
+	//SRINDHL Add journal entries in the waiting for grade counts.
+	 global $CFG, $DB, $SESSION;
+    if (isset($SESSION->completioncache)) {
+        unset($SESSION->completioncache);
+    }
+    if ($mod->modname == 'journal') {
+		
+		if (!($journal = $DB->get_record('journal', array('id' => $mod->instance)))) {
+            return false;
+        }
+	    $entries = $DB->get_records('journal_entries', array(
+            'journal' => $journal->id, 'userid' => $userid), 'id DESC', '*', 0, 1);
+		// Get any grades for the journal. 
+	   $grades = grade_get_grades($course->id, 'mod', 'journal', $journal->id, $userid);  
+	    if ($entries) {
+			$grade = reset($grades->items[0]->grades);
+			foreach($entries as $id=>$attempt) {
+				if ($grade->grade) {
+					if ($grade->grade > -1) {
+						if (($attempt->modified > $grade->dategraded)) {
+							$graded = false;
+						} else {
+							$graded = true;
+						}
+					} else {
+						$graded = false;
+					}
+				} else {
+					$graded = false;
+				}
+							
+				// No grade journals.
+				if ($journal->grade == 0) {
+					return 'submitted';
+				}
+				
+				if ($attempt->rating === NULL || $grade->grade === NULL) {
+						return 'waitinggrade';
+				} else {
+						if ($graded) {
+							return 'submitted';
+						}
+				}
+			}
+		} else {
+			return false;
+		}
+	} else {
+		return false;
+	}
+}
+
+
+/* Add functionality for getting Scorm data
+*/
+function get_scorm_activity($course, $userid, $mod) {
+	global $CFG;
+	require_once($CFG->dirroot.'/mod/scorm/lib.php');
+	$scorm = new stdClass;
+	$scorm->id = $mod->instance;
+	$user = new stdClass;
+	$user->id = $userid;
+	$scormgrade = scorm_get_user_grades($scorm, $userid);
+	$scormoutline = scorm_user_outline($course, $user, $mod, $scorm);
+	$scormactivity = array();
+	$scormactivity['grade'] = $scormgrade;
+	$scormactivity['outline'] = $scormoutline;
+	return $scormactivity;
+}
+
 function block_fn_mentor_grade_summary($studentid, $courseid=0) {
     global $DB;
 
@@ -1056,12 +1332,7 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
             $course = $DB->get_record('course', array('id' => $id), '*', MUST_EXIST);
 
             // Available modules for grading.
-            $modavailable = array(
-                'assign' => '1',
-                'quiz' => '1',
-                'assignment' => '1',
-                'forum' => '1',
-            );
+            $modavailable = get_graded_mods();
 
             $context = context_course::instance($course->id);
 
@@ -1100,6 +1371,251 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
                         }
                     }
                 }
+				
+				//  Remove not fully graded lessons.
+                if ($mod->modname == 'lesson') {
+					if($lesson = $DB->get_record('lesson', array('id' => $mod->instance))) {
+						if ($lesson->grade > 0 && $lesson->practice != 1) {
+							if ($lessongrades = $DB->get_records('lesson_grades', array('lessonid' => $lesson->id, 'userid' => $studentid), 'id DESC', '*', 0, 1)) {
+								//Graded.
+								if ($attempts = $DB->get_records('lesson_attempts', array(
+									'lessonid' => $lesson->id, 'userid' => $studentid), 'id DESC', '*', 0, 1)
+								) {
+									if($attempts) {											
+										   $i = 0;
+										   $count = count($attempts);
+										   $attempt = array_values($attempts);
+										   $lessongrade = new stdClass;
+										   $lessongrade->dontcount = false;
+										   for($i = 0; $i < $count; ++$i) {
+											 // check for ungraded lesson essay answers.
+											 $useranswer = $attempt[$i]->useranswer;
+											 if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false)) {
+												 if($answer = unserialize($useranswer)) {
+													if($answer->graded == 0) {
+														 $lessongrade->dontcount = true; 
+													} 
+												 }
+											 }
+											}
+										}
+										if ($lessongrade->dontcount == true) {
+											
+										   --$nogradeassignments;
+										}
+								}
+							}
+						}	
+					}
+                }
+
+				if (!$gradeitem = $DB->get_record('grade_items',
+					array('itemtype' => 'mod', 'itemmodule' => $mod->modname, 'iteminstance' => $mod->instance))) {
+					continue;
+				}
+
+                $gradetotal['all_max'] += $gradeitem->grademax;
+
+                if ($gradegrade = $DB->get_record('grade_grades', array('itemid' => $gradeitem->id, 'userid' => $studentid))) {
+
+                    if ($mod->modname == 'assign') {
+                        if ($assigngrades = $DB->get_records('assign_grades', array(
+                            'assignment' => $mod->instance, 'userid' => $studentid), 'attemptnumber DESC')) {
+                            $assigngrade = reset($assigngrades);
+                            if ($assigngrade->grade >= 0) {
+                                // Graded.
+                                $gradetotal['attempted_grade'] += $gradegrade->finalgrade;
+                                $gradetotal['attempted_max'] += $gradeitem->grademax;
+                            }
+                        }
+                    } else {
+                        // Graded.
+                        $gradetotal['attempted_grade'] += $gradegrade->finalgrade;
+                        $gradetotal['attempted_max'] += $gradeitem->grademax;
+                    }
+                }
+            }
+        }
+    }
+
+    if ($gradetotal['attempted_max']) {
+        $attempted = round(($gradetotal['attempted_grade'] / $gradetotal['attempted_max']) * 100);
+    } else {
+        $attempted = 0;
+    }
+    if ($gradetotal['all_max']) {
+        $all = round(($gradetotal['attempted_grade'] / $gradetotal['all_max']) * 100);
+    } else {
+        $all = 0;
+    }
+
+    $data->attempted = $attempted;
+    $data->all = $all;
+    $data->passed = 0;
+    $data->failed = 0;
+    $data->timecompleted = 0;
+
+
+    if ($courses) {
+        foreach ($courses as $id => $value) {
+            $sqlcourseaverage = "SELECT gg.id,
+                                        gg.rawgrademax,
+                                        gg.finalgrade
+                                   FROM {grade_items} gi
+                                   JOIN {grade_grades} gg
+                                     ON gi.id = gg.itemid
+                                  WHERE gi.itemtype = ?
+                                    AND gi.courseid = ?
+                                    AND gg.userid = ?
+									AND gi.gradetype <> '0'
+									AND gi.aggregationcoef <> '1%'";
+            if ($courseaverage = $DB->get_record_sql($sqlcourseaverage, array('course', $id, $studentid))) {
+                 //Prevent division by zero.
+				 if($courseaverage->rawgrademax > 0) {
+					$coursegrades[$id] = ($courseaverage->finalgrade / $courseaverage->rawgrademax) * 100;
+				} else {
+					//Prevent division by zero.
+					$coursegrades[$id] = 0;
+				}
+
+                if ($coursegrades[$id] >= $passinggrade) {
+                    $data->passed++;
+                } else {
+                    $data->failed++;
+                }
+            }
+            $info = new completion_info($cor = $DB->get_record('course', array('id' => $id)));
+            if ($iscomplete = $info->is_course_complete($studentid)) {
+                $ccompletion = $DB->get_record('course_completions', array('userid' => $studentid, 'course' => $id));
+                $data->timecompleted = $ccompletion->timecompleted;
+            }
+        }
+    }
+    if (count($coursegrades)) {
+        $data->allcourseaverge = round(array_sum($coursegrades) / count($coursegrades));
+    } else {
+        $data->allcourseaverge = 0;
+    }
+
+    if ($courseid) {
+
+        if (isset($coursegrades[$courseid])) {
+            $data->courseaverage = round($coursegrades[$courseid]);
+        } else {
+            $data->courseaverage = 0;
+			//  If no course grade then don't show a percentage.
+			if ($data->all == 0) {
+				$data->courseaverage = 'N/A';
+			}
+        }
+
+        $sqlactivity = "SELECT gi.id,
+                               gg.finalgrade
+                          FROM {grade_items} gi
+               LEFT OUTER JOIN {grade_grades} gg
+                            ON gi.id = gg.itemid
+                         WHERE gi.courseid = ?
+                           AND gi.itemtype = ?
+                           AND gg.userid = ?";
+        if ($gradedavtivities = $DB->get_records_sql($sqlactivity, array($courseid, 'mod', $studentid))) {
+            $numofactivities = 0;
+            $numofgraded = 0;
+            foreach ($gradedavtivities as $gradedavtivity) {
+                $numofactivities++;
+                if (is_numeric($gradedavtivity->finalgrade)) {
+                    $numofgraded++;
+                }
+            }
+            $totalnumofgraded = $nogradeassignments + $numofgraded;
+			//added to separate completed vs total.
+			$data->numofgraded = $totalnumofgraded;
+			$data->numofactivities = $numofactivities;
+            $data->numofcompleted = "$totalnumofgraded/$numofactivities";
+            $data->percentageofcompleted = round(($numofgraded / $numofactivities) * 100);
+        } else {
+            //added to separate completed vs total.
+			$data->numofgraded = "N/A";
+			$data->numofactivities = 0;
+			$data->numofcompleted = "N/A";
+            $data->percentageofcompleted = 0;
+        }
+    }
+
+    return $data;
+}
+
+function block_fn_mentor_quality_grade ($studentid, $courseid=0) {
+	//Add BlueSky's quality grade calculation to Grade window.
+	global $DB;
+
+    $data = new stdClass();
+    $courses = array();
+    $coursegrades = array();
+    $nogradeassignments = 0;
+	$qualitygrades = array();
+
+    if (! $passinggrade = get_config('block_fn_mentor', 'passinggrade')) {
+        $passinggrade = 50;
+    }
+
+    $gradetotal = array(
+        'attempted_grade' => 0,
+        'attempted_max' => 0,
+        'all_max' => 0
+    );
+
+    if ($courseid) {
+        $courses[$courseid] = $courseid;
+    } else {
+        $courses = block_fn_mentor_get_student_courses($studentid);
+    }
+
+    if ($courses) {
+        foreach ($courses as $id => $value) {
+
+            $course = $DB->get_record('course', array('id' => $id), '*', MUST_EXIST);
+
+            // Available modules for grading.
+            $modavailable = get_graded_mods();
+
+            $context = context_course::instance($course->id);
+
+            // Collect modules data.
+            $mods = get_course_mods($course->id);
+
+            // Skip some mods.
+            foreach ($mods as $mod) {
+                if (!isset($modavailable[$mod->modname])) {
+                    continue;
+                }
+                // Skip non tracked activities.
+                if ($mod->completion == COMPLETION_TRACKING_NONE) {
+                    continue;
+                }
+                if ($mod->groupingid) {
+                    $sqlgrouiping = "SELECT 1
+                                      FROM {groupings_groups} gg
+                                INNER JOIN {groups_members} gm
+                                        ON gg.groupid = gm.groupid
+                                     WHERE gg.groupingid = ?
+                                       AND gm.userid = ?";
+                    if (!$DB->record_exists_sql($sqlgrouiping, array($mod->groupingid, $studentid))) {
+                        continue;
+                    }
+                }
+                // Check no grade assignments.
+                if ($mod->modname == 'assign') {
+                    if ($assignment = $DB->get_record('assign', array('id' => $mod->instance))) {
+                        if ($assignment->grade == 0) {
+                            if ($submission = $DB->get_records('assign_submission', array(
+                                'assignment' => $assignment->id, 'userid' => $studentid), 'attemptnumber DESC', '*', 0, 1)
+                            ) {
+                                ++$nogradeassignments;
+                            }
+                        }
+                    }
+                }
+				
 
                 if (!$gradeitem = $DB->get_record('grade_items',
                     array('itemtype' => 'mod', 'itemmodule' => $mod->modname, 'iteminstance' => $mod->instance))) {
@@ -1147,73 +1663,107 @@ function block_fn_mentor_grade_summary($studentid, $courseid=0) {
     $data->timecompleted = 0;
 
     if ($courses) {
-        foreach ($courses as $id => $value) {
-            $sqlcourseaverage = "SELECT gg.id,
-                                        gg.rawgrademax,
-                                        gg.finalgrade
-                                   FROM {grade_items} gi
-                                   JOIN {grade_grades} gg
-                                     ON gi.id = gg.itemid
-                                  WHERE gi.itemtype = ?
-                                    AND gi.courseid = ?
-                                    AND gg.userid = ?";
-            if ($courseaverage = $DB->get_record_sql($sqlcourseaverage, array('course', $id, $studentid))) {
-                $coursegrades[$id] = ($courseaverage->finalgrade / $courseaverage->rawgrademax) * 100;
+		foreach ($courses as $id => $value) {
+				$sqlcourseaverage = "SELECT gg.id, gi.itemmodule as itemmodule, gi.iteminstance as iteminstance, round(gg.finalgrade,2) as finalgrade, round(gg.rawgrademax,2) as rawgrademax
+									   FROM {grade_grades} gg
+									   JOIN {grade_items} gi
+										 ON  gi.id = gg.itemid
+									  WHERE gi.itemtype = ?
+										AND gi.courseid = ?
+										AND gg.userid = ?
+										AND gi.gradetype <> '0'
+										AND gi.aggregationcoef <> '1%'
+										AND gg.finalgrade IS NOT NULL";
+				
+				if ($records = $DB->get_records_sql($sqlcourseaverage, array('mod', $id, $studentid))) {
+					$quality = new stdClass;
+					$quality->finalgrade = 0;
+					$quality->rawgrademax = 0;
+					foreach ($records as $record) {
+						//  Don't count ungraded lessons in quality count.
+						if ($record->itemmodule == 'lesson') {
+							if ($lessongrades = $DB->get_records('lesson_grades', array(
+							 'lessonid' => $record->iteminstance, 'userid' => $studentid), 'id DESC')) {
+								$lessongrade = reset($lessongrades);
+								if ($lessongrade->grade >= 0) {
+									//Graded.
+									$attempts = $DB->get_records('lesson_attempts', array(
+									 'lessonid' => $record->iteminstance, 'userid' => $studentid), 'answerid DESC');
+									if($attempts) {											
+									   $i = 0;
+									   $count = count($attempts);
+									   $attempt = array_values($attempts);
+									   $lessongrade->dontcount = false;
+									   for($i = 0; $i < $count; ++$i) {
+											 // check for ungraded lesson essay answers.
+											 $useranswer = $attempt[$i]->useranswer;
+											 if((strpos($useranswer, 'stdClass') !== false) && (strpos($useranswer, 'graded') !== false)) {
+												 if($answer = unserialize($useranswer)) {
+													if($answer->graded == 0) {
+														 $lessongrade->dontcount = true; 
+													} 
+												 }
+											 }
+										}
+									}
+									if ($lessongrade->dontcount != true) {
+										// Graded.
+										$quality->finalgrade += $record->finalgrade;
+										$quality->rawgrademax += $record->rawgrademax;
+									}
+									
+								}
+							}
+						} else {
+							$quality->finalgrade += $record->finalgrade;
+							$quality->rawgrademax += $record->rawgrademax;
+						} 
+						/*foreach ($record as $key => $value) {
+							if($key != 'id') {
+									$quality->$key += $value;
+							} 
+						} */
+					};
+					if ($quality->rawgrademax == 0) {
+						$qualitygrades[$id] = 0;
+					} else {
+						$qualitygrades[$id] = ($quality->finalgrade / $quality->rawgrademax) * 100;
+					}
 
-                if ($coursegrades[$id] >= $passinggrade) {
-                    $data->passed++;
-                } else {
-                    $data->failed++;
-                }
-            }
-            $info = new completion_info($cor = $DB->get_record('course', array('id' => $id)));
-            if ($iscomplete = $info->is_course_complete($studentid)) {
+					if ($qualitygrades[$id] >= $passinggrade) {
+						$data->passed++;
+					} else {
+						$data->failed++;
+					}
+				}
+				$info = new completion_info($cor = $DB->get_record('course', array('id' => $id)));
+				if ($iscomplete = $info->is_course_complete($studentid)) {
                 $ccompletion = $DB->get_record('course_completions', array('userid' => $studentid, 'course' => $id));
                 $data->timecompleted = $ccompletion->timecompleted;
-            }
+				}
         }
     }
-    if (count($coursegrades)) {
-        $data->allcourseaverge = round(array_sum($coursegrades) / count($coursegrades));
+    if (count($qualitygrades)) {
+        $data->allcourseaverge = round(array_sum($qualitygrades) / count($qualitygrades));
     } else {
         $data->allcourseaverge = 0;
     }
+	
+	if ($courseid) {
 
-    if ($courseid) {
-
-        if (isset($coursegrades[$courseid])) {
-            $data->courseaverage = round($coursegrades[$courseid]);
+        if (isset($qualitygrades[$courseid])) {
+            $data->courseaverage = round($qualitygrades[$courseid]);
         } else {
             $data->courseaverage = 0;
+			//  If no course grade then don't show a percentage.
+			if ($data->all == 0) {
+				$data->courseaverage = 'N/A';
+			}
         }
-
-        $sqlactivity = "SELECT gi.id,
-                               gg.finalgrade
-                          FROM {grade_items} gi
-               LEFT OUTER JOIN {grade_grades} gg
-                            ON gi.id = gg.itemid
-                         WHERE gi.courseid = ?
-                           AND gi.itemtype = ?
-                           AND gg.userid = ?";
-        if ($gradedavtivities = $DB->get_records_sql($sqlactivity, array($courseid, 'mod', $studentid))) {
-            $numofactivities = 0;
-            $numofgraded = 0;
-            foreach ($gradedavtivities as $gradedavtivity) {
-                $numofactivities++;
-                if (is_numeric($gradedavtivity->finalgrade)) {
-                    $numofgraded++;
-                }
-            }
-            $totalnumofgraded = $nogradeassignments + $numofgraded;
-            $data->numofcompleted = "$totalnumofgraded/$numofactivities";
-            $data->percentageofcompleted = round(($numofgraded / $numofactivities) * 100);
-        } else {
-            $data->numofcompleted = "N/A";
-            $data->percentageofcompleted = 0;
-        }
-    }
+	}
 
     return $data;
+	
 }
 
 function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
@@ -1222,6 +1772,12 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
     $html = '';
     $courseaverage = block_fn_mentor_get_user_course_average($studentid, $courseid);
     $gradesummary = block_fn_mentor_grade_summary($studentid, $courseid);
+	// Add Quality Grade to print results.
+	$qualitysummary = block_fn_mentor_quality_grade($studentid, $courseid);
+	//  Use the configured passing grade.
+	if (! $passinggrade = get_config('block_fn_mentor', 'passinggrade')) {
+        $passinggrade = 50;
+    }
 
     $html .= '<table class="mentee-course-overview-grade_table">';
     $html .= '<tr>';
@@ -1234,10 +1790,15 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
         $class = 'red';
         $nocoursetotalmsg = get_string('nocoursetotal', 'block_fn_mentor');
     } else {
-        $class = ($gradesummary->courseaverage >= 50) ? 'green' : 'red';
+        //  Use the configured passing grade.
+		$class = ($gradesummary->courseaverage >= $passinggrade) ? 'green' : 'red';
         $nocoursetotalmsg = '';
     }
-    $html .= '<td class="overview-grade-right '.$class.'" valign="middle">'.$gradesummary->courseaverage.'%</td>';
+	//  If no course grade then don't show a percentage.
+    if (is_numeric($gradesummary->courseaverage)){
+		$gradesummary->courseaverage = $gradesummary->courseaverage . '%';
+	}
+	$html .= '<td class="overview-grade-right '.$class.'" valign="middle">'.$gradesummary->courseaverage.'</td>';
     $html .= '</tr>';
     if ($courseaverage == false) {
         $warningimg = '<img class="actionicon" width="16" height="16" alt="" src="'.$OUTPUT->pix_url('i/warning', '').'"> ';
@@ -1245,7 +1806,25 @@ function block_fn_mentor_print_grade_summary ($courseid , $studentid) {
         $html .= '<td colspan="2" class="overview-grade-right-warning" valign="middle">'.$warningimg.get_string('nocoursetotal', 'block_fn_mentor').'</td>';
         $html .= '</tr>';
     }
+	//  add Quality grade to grade window.
+	$html .= '<tr>';
+	$html .= '<td class="overview-grade-left" valign="middle">'.get_string('qualitygrade', 'block_fn_mentor').':</td>';
+    if ($courseaverage == false) {
+        $class = 'red';
+        $nocoursetotalmsg = get_string('nocoursetotal', 'block_fn_mentor');
+    } else {
+        $class = ($qualitysummary->courseaverage >= $passinggrade) ? 'green' : 'red';
+        $nocoursetotalmsg = '';
+    }
+	//  If no course grade then don't show a percentage.
+	if (is_numeric($qualitysummary->courseaverage)){
+		$qualitysummary->courseaverage = $qualitysummary->courseaverage . '%';
+	}
+    $html .= '<td class="overview-grade-right '.$class.'" valign="middle">'.$qualitysummary->courseaverage.'</td>';
+	$html .= '</tr>';
+	
     $html .= '</table>';
+	
     return $html;
 }
 
@@ -1794,12 +2373,18 @@ function block_fn_mentor_render_notification_rule_table($notification, $number) 
     return $html;
 }
 
+
 function block_fn_mentor_last_activity ($studentid) {
     global $DB;
-
+	// added extra activity types, lesson, journal, scorm, LTI, HSU forum.
     $lastsubmission = null;
     $lastattempt = null;
     $lastpost = null;
+	$lasthsupost = null;
+	$llastattempt = null;
+	$jlastentry = null;
+	$sclastattempt = null;
+	$ltilastsubmission = null;
 
     // Assign.
     $sqlassign = "SELECT s.id,
@@ -1826,6 +2411,30 @@ function block_fn_mentor_last_activity ($studentid) {
         $attempt = reset($attempts);
         $lastattempt = round(((time() - $attempt->timefinish) / (24 * 60 * 60)), 0);
     }
+	
+	// Lessons.
+    $sqllesson = "SELECT l.id,
+                       l.completed
+                  FROM {lesson_grades} l
+                 WHERE l.userid = ?
+              ORDER BY l.completed DESC";
+
+    if ($lattempts = $DB->get_records_sql($sqllesson, array($studentid))) {
+        $lattempt = reset($lattempts);
+        $llastattempt = round(((time() - $lattempt->completed) / (24 * 60 * 60)), 0);
+    }
+	
+	// Journals.
+    $sqljournal = "SELECT j.id,
+                       j.modified
+                  FROM {journal_entries} j
+                 WHERE j.userid = ?
+              ORDER BY j.modified DESC";
+
+    if ($entries = $DB->get_records_sql($sqljournal, array($studentid))) {
+        $entry = reset($entries);
+        $jlastentry = round(((time() - $entry->modified) / (24 * 60 * 60)), 0);
+    }
 
     // Forum.
     $sqlforum = "SELECT f.id,
@@ -1838,8 +2447,44 @@ function block_fn_mentor_last_activity ($studentid) {
         $post = reset($posts);
         $lastpost = round(((time() - $post->modified) / (24 * 60 * 60)), 0);
     }
+	
+	// HSUForum.
+    $sqlhforum = "SELECT f.id,
+                        f.modified
+                   FROM {hsuforum_posts} f
+                  WHERE f.userid = ?
+               ORDER BY f.modified DESC";
 
-    return min($lastsubmission, $lastattempt, $lastpost);
+    if ($hposts = $DB->get_records_sql($sqlhforum, array($studentid))) {
+        $hpost = reset($hposts);
+        $lasthsupost = round(((time() - $hpost->modified) / (24 * 60 * 60)), 0);
+    }
+	
+	//Scorm.
+	$sqlscorm = "SELECT sc.id,
+                        sc.timemodified
+                   FROM {scorm_scoes_track} sc
+                  WHERE sc.userid = ?
+               ORDER BY sc.timemodified DESC";
+
+    if ($scattempts = $DB->get_records_sql($sqlscorm, array($studentid))) {
+        $scattempt = reset($scattempts);
+        $sclastattempt = round(((time() - $scattempt->timemodified) / (24 * 60 * 60)), 0);
+    }
+	
+	// LTI.
+    $sqllti = "SELECT lti.id,
+                         lti.datesubmitted
+                    FROM {lti_submission} lti
+                   WHERE lti.userid = ?
+                ORDER BY lti.datesubmitted DESC";
+
+    if ($ltisubmissions = $DB->get_records_sql($sqllti, array($studentid))) {
+        $ltisubmission = reset($ltisubmissions);
+        $ltilastsubmission = round(((time() - $ltisubmission->datesubmitted) / (24 * 60 * 60)), 0);
+    }
+
+    return min($lastsubmission, $lastattempt, $llastattempt, $lastpost, $lasthsupost, $jlastentry, $sclastattempt, $ltilastsubmission);
 }
 
 function block_fn_mentor_report_outline_print_row($mod, $instance, $result) {
@@ -1872,77 +2517,89 @@ function block_fn_mentor_report_outline_print_row($mod, $instance, $result) {
     echo "</tr>";
 }
 
-function block_fn_mentor_format_time($totalsecs, $str=null) {
+function block_fn_mentor_format_time($time, $lastaccess, $str=null) {
+	/* adjusted the function to include never access, 
+	* make sure to change all instances of function to three 
+	* params in course_overview.php and 
+	* course_overview_single.php */
+    
+	if($lastaccess == 0) {
+		$never = true;
+		return 'Never';
+		// No calulations necessary.
+	} else {
+		// Go ahead and calculate the last access
+		$totalsecs = abs($time - $lastaccess);
 
-    $totalsecs = abs($totalsecs);
+		if (!$str) {  // Create the str structure the slow way.
+			$str = new stdClass();
+			$str->day   = get_string('day');
+			$str->days  = get_string('days');
+			$str->hour  = get_string('hour');
+			$str->hours = get_string('hours');
+			$str->min   = get_string('min');
+			$str->mins  = get_string('mins');
+			$str->sec   = get_string('sec');
+			$str->secs  = get_string('secs');
+			$str->year  = get_string('year');
+			$str->years = get_string('years');
+		}
 
-    if (!$str) {  // Create the str structure the slow way.
-        $str = new stdClass();
-        $str->day   = get_string('day');
-        $str->days  = get_string('days');
-        $str->hour  = get_string('hour');
-        $str->hours = get_string('hours');
-        $str->min   = get_string('min');
-        $str->mins  = get_string('mins');
-        $str->sec   = get_string('sec');
-        $str->secs  = get_string('secs');
-        $str->year  = get_string('year');
-        $str->years = get_string('years');
-    }
+		$years     = floor($totalsecs / YEARSECS);
+		$remainder = $totalsecs - ($years * YEARSECS);
+		$days      = floor($remainder / DAYSECS);
+		$remainder = $totalsecs - ($days * DAYSECS);
+		$hours     = floor($remainder / HOURSECS);
+		$remainder = $remainder - ($hours * HOURSECS);
+		$mins      = floor($remainder / MINSECS);
+		$secs      = $remainder - ($mins * MINSECS);
 
-    $years     = floor($totalsecs / YEARSECS);
-    $remainder = $totalsecs - ($years * YEARSECS);
-    $days      = floor($remainder / DAYSECS);
-    $remainder = $totalsecs - ($days * DAYSECS);
-    $hours     = floor($remainder / HOURSECS);
-    $remainder = $remainder - ($hours * HOURSECS);
-    $mins      = floor($remainder / MINSECS);
-    $secs      = $remainder - ($mins * MINSECS);
+		$ss = ($secs == 1) ? $str->sec : $str->secs;
+		$sm = ($mins == 1) ? $str->min : $str->mins;
+		$sh = ($hours == 1) ? $str->hour : $str->hours;
+		$sd = ($days == 1) ? $str->day : $str->days;
+		$sy = ($years == 1) ? $str->year : $str->years;
 
-    $ss = ($secs == 1) ? $str->sec : $str->secs;
-    $sm = ($mins == 1) ? $str->min : $str->mins;
-    $sh = ($hours == 1) ? $str->hour : $str->hours;
-    $sd = ($days == 1) ? $str->day : $str->days;
-    $sy = ($years == 1) ? $str->year : $str->years;
+		$oyears = '';
+		$odays = '';
+		$ohours = '';
+		$omins = '';
+		$osecs = '';
 
-    $oyears = '';
-    $odays = '';
-    $ohours = '';
-    $omins = '';
-    $osecs = '';
+			
+		if ($years) {
+			$oyears  = $years .' '. $sy;
+		}
+		if ($days) {
+			$odays  = $days .' '. $sd;
+		}
+		if ($hours) {
+			$ohours = $hours .' '. $sh;
+		}
+		if ($mins) {
+			$omins  = $mins .' '. $sm;
+		}
+		if ($secs) {
+			$osecs  = $secs .' '. $ss;
+		}
 
-    if ($years) {
-        $oyears  = $years .' '. $sy;
-    }
-    if ($days) {
-        $odays  = $days .' '. $sd;
-    }
-    if ($hours) {
-        $ohours = $hours .' '. $sh;
-    }
-    if ($mins) {
-        $omins  = $mins .' '. $sm;
-    }
-    if ($secs) {
-        $osecs  = $secs .' '. $ss;
-    }
-
-    if ($years) {
-        return trim($oyears);
-    }
-    if ($days) {
-        return trim($odays);
-    }
-    if ($hours) {
-        return trim($ohours);
-    }
-    if ($mins) {
-        return trim($omins);
-    }
-    if ($secs) {
-        return $osecs;
-    }
-    return get_string('now');
+		if ($years) {
+			return trim($oyears);
+		}
+		if ($days) {
+			return trim($odays);
+		}
+		if ($hours) {
+			return trim($ohours);
+		}
+		if ($mins) {
+			return trim($omins);
+		}
+		if ($secs) {
+			return $osecs;
+		}
+		return get_string('now');
+	}
 }
 
 function block_fn_mentor_note_print($note, $detail = NOTES_SHOW_FULL) {
@@ -2490,7 +3147,7 @@ function block_fn_mentor_get_selected_courses($category, &$filtercourses) {
             block_fn_mentor_get_selected_courses($subcat, $course);
         }
     }
-};
+}
 
 function block_fn_mentor_embed ($text, $id) {
     return html_writer::tag('p',
@@ -2498,7 +3155,47 @@ function block_fn_mentor_embed ($text, $id) {
             'value' => $text, 'type' => 'button', 'id' => $id
         ))
     );
-};
+}
+
+function get_enrollment_dates($menteeid, $enrolledcourse) {
+	//  Add for enrollment period dates.
+	global $DB;
+	$data = new stdClass;
+		$sql = "SELECT ue.timestart, ue.timeend
+                          FROM {user_enrolments} ue
+                          JOIN {enrol} e
+                            ON e.id = ue.enrolid
+                         WHERE ue.userid = ?
+                           AND e.courseid = ?";
+		if ($enrolinfo = $DB->get_records_sql($sql, array($menteeid, $enrolledcourse))) {
+			// If there are more than one enrollment record remove any records without a start or end date.
+			if (count($enrolinfo) > 1) {
+				foreach($enrolinfo as $key => $value) {
+					if($value->timestart == 0 || $value->timeend == 0) {
+						unset($enrolinfo[$key]);
+					}
+				}
+			}
+
+			foreach ($enrolinfo as $enrol) { 
+				    $data->enrolstart = $enrol->timestart;
+				    $data->enrolend = $enrol->timeend;
+			}
+		} else {
+			 $data->enrolstart = 0;
+			 $data->enrolend = 0;
+		}
+		
+		return $data;
+}
+
+
+function get_session_times($enrolledcourse) {
+	//  Connect to external database logs to get session times for each course. Compare course id number to get times. Returns string.
+	$extdb = new Database();
+	$sessiondata = $extdb->get_extdb_sessions($enrolledcourse);
+	return $sessiondata;
+}
 
 function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) {
     global $CFG, $DB, $SESSION;
@@ -2558,80 +3255,287 @@ function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) 
                 continue;
             }
             $instance = $DB->get_record($activity->modname, array("id" => $activity->instance));
-            $item = $DB->get_record('grade_items',
-                array("itemtype" => 'mod', "itemmodule" => $activity->modname, "iteminstance" => $activity->instance)
-            );
-
+			//  Only count if it is a graded item.
+            if (!$item = $DB->get_record('grade_items',
+                array("itemtype" => 'mod', "itemmodule" => $activity->modname, "iteminstance" => $activity->instance))) {
+					continue;
+				}
+            
             $libfile = $CFG->dirroot . '/mod/' . $activity->modname . '/lib.php';
+            //  Check to see if the mod has an internal grade function, if not use Moodle get grades function. (For extra modules).
+			if (file_exists($libfile)) {
+				$gradefunction = $activity->modname . "_get_user_grades";
+				if(!function_exists($gradefunction)) {
+					$gradefunction = "grade_get_grades";
+				} else {
+					require_once($libfile);
+				}
+		    }
+            //  Add the advanced forums to check.
+			if ((($activity->modname != 'forum') || ($activity->modname != 'hsuforum') || ($instance->assessed > 0))
+				&& isset($modgradesarray[$activity->modname])) {
 
-            if (file_exists($libfile)) {
-                require_once($libfile);
-                $gradefunction = $activity->modname . "_get_user_grades";
+				if (function_exists($gradefunction)) {
+                    //  Check to see if this module is using their own get grades method or switch to the standard Moodle get grades function.
+					if (strpos($gradefunction, $activity->modname) !== false) {
+						
+                        if ($grade = $gradefunction($instance, $menteeid)) {
+							//  Reordered loop to pass through special cases first before using the standard method.
+							if ($modstatus = block_fn_mentor_assignment_status($activity, $menteeid, true)) {
+							    switch ($modstatus) {
+									case 'submitted':
+										if ($instance->grade == 0) {
+											// Graded
+											++$completedactivities;
+										} else if ($grade = $gradefunction($instance, $menteeid)) {
+											if ($item->gradepass > 0) {
+												if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+												   // Passed
+													++$completedactivities;
+												} else {
+													// Fail.
+													++$incompletedactivities;
+												}
+											} else {
+												// Graded
+												++$completedactivities;
+											}
+										}
+										break;
 
-                if ((($activity->modname != 'forum') || ($instance->assessed > 0))
-                    && isset($modgradesarray[$activity->modname])) {
+									case 'saved':
+										// Saved
+										++$savedactivities;
+										break;
 
-                    if (function_exists($gradefunction)) {
+									case 'waitinggrade':
+										// Waiting for grade
+										++$waitingforgradeactivities;
+										break;
+								}
+						    } else if ($modstatus = block_fn_mentor_forum_status($activity, $menteeid, true)) {
+								//  Check for special forum statuses.
+								switch ($modstatus) {
+									case 'submitted':
+										if ($instance->assessed == 0) {
+											// Graded
+											++$completedactivities;
+										} else if ($grade = $gradefunction($instance, $menteeid)) {
+											if ($item->gradepass > 0) {
+												if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+												   // Passed
+													++$completedactivities;
+												} else {
+													// Fail.
+													++$incompletedactivities;
+												}
+											} else {
+												// Graded
+												++$completedactivities;
+											}
+										}
+										break;
 
-                        if (($activity->modname == 'quiz') || ($activity->modname == 'forum')) {
+									case 'saved':
+										// Saved
+										++$savedactivities;
+										break;
 
-                            if ($grade = $gradefunction($instance, $menteeid)) {
-                                if ($item->gradepass > 0) {
-                                    if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
-                                        // Passed
-                                        ++$completedactivities;
-                                    } else {
-                                        // Failed
-                                        ++$incompletedactivities;
-                                    }
-                                } else {
-                                    // Graded
-                                    ++$completedactivities;
-                                }
-                            } else {
-                                // Ungraded
-                                ++$notattemptedactivities;
-                            }
-                        } else if ($modstatus = block_fn_mentor_assignment_status($activity, $menteeid, true)) {
-                            switch ($modstatus) {
-                                case 'submitted':
-                                    if ($instance->grade == 0) {
-                                        // Graded
-                                        ++$completedactivities;
-                                    } elseif ($grade = $gradefunction($instance, $menteeid)) {
-                                        if ($item->gradepass > 0) {
-                                            if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
-                                               // Passed
-                                                ++$completedactivities;
-                                            } else {
-                                                // Fail.
-                                                ++$incompletedactivities;
-                                            }
-                                        } else {
-                                            // Graded
-                                            ++$completedactivities;
-                                        }
-                                    }
-                                    break;
+									case 'waitinggrade':
+										// Waiting for grade
+										++$waitingforgradeactivities;
+										break;
+								}
+							} else if  ($modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true)) {	
+							//  Check for special quiz statuses.
+								switch ($modstatus) {
+									case 'submitted':
+										if ($instance->grade == 0) {
+											// Graded
+											++$completedactivities;
+										} else if ($grade = $gradefunction($instance, $menteeid)) {
+											if ($item->gradepass > 0) {
+												if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+												   // Passed
+													++$completedactivities;
+												} else {
+													// Fail.
+													++$incompletedactivities;
+												}
+											} else {
+												// Graded
+												++$completedactivities;
+											}
+										}
+										break;
 
-                                case 'saved':
-                                    // Saved
-                                    ++$savedactivities;
-                                    break;
+									case 'saved':
+										// Saved
+										++$savedactivities;
+										break;
 
-                                case 'waitinggrade':
-                                    // Waiting for grade
-                                    ++$waitingforgradeactivities;
-                                    break;
-                            }
-                        } else {
-                            // Ungraded
-                            ++$notattemptedactivities;
-                        }
-                    }
-                }
-            }
-        }
+									case 'waitinggrade':
+										// Waiting for grade
+										++$waitingforgradeactivities;
+										break;
+								}
+					        } else if ($modstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course, true)) {
+							//  Check for special lesson statuses.
+						        switch ($modstatus) {
+									case 'submitted':
+										if ($instance->grade == 0) {
+											// Graded
+											++$completedactivities;
+										} else if ($grade = $gradefunction($instance, $menteeid)) {
+											if ($item->gradepass > 0) {
+												if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+												   // Passed
+													++$completedactivities;
+												} else {
+													// Fail.
+													++$incompletedactivities;
+												}
+											} else {
+												// Graded
+												++$completedactivities;
+											}
+										}
+										break;
+
+									case 'saved':
+										// Saved
+										++$savedactivities;
+										break;
+
+									case 'waitinggrade':
+										// Waiting for grade
+										++$waitingforgradeactivities;
+										break;
+								}
+					        } else if ($modstatus = block_fn_mentor_journal_status($activity, $menteeid, $course, true)) {
+							//  Check for special journal statuses.
+								switch ($modstatus) {
+									case 'submitted':
+										if ($instance->grade == 0) {
+											// Graded
+											++$completedactivities;
+										} else if ($grade = $gradefunction($instance, $menteeid)) {
+											if ($item->gradepass > 0) {
+												if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+												   // Passed
+													++$completedactivities;
+												} else {
+													// Fail.
+													++$incompletedactivities;
+												}
+											} else {
+												// Graded
+												++$completedactivities;
+											}
+										}
+										break;
+
+									case 'saved':
+										// Saved
+										++$savedactivities;
+										break;
+
+									case 'waitinggrade':
+										// Waiting for grade
+										++$waitingforgradeactivities;
+										break;
+								}
+							} else if ($grade) {
+								if ($item->gradepass > 0) {
+									if ($grade[$menteeid]->rawgrade >= $item->gradepass) {
+										// Passed
+										++$completedactivities;
+									} else {
+										// Failed
+										++$incompletedactivities;
+									}
+								} else {
+									// Graded
+									++$completedactivities;
+								}
+
+							} else {
+								// Ungraded
+								++$notattemptedactivities;
+							}
+							
+						} else if ($activity->modname == 'forum' || $activity->modname == 'hsuforum') {
+							// Count waiting for grade forums without a grade from grade function.
+							$modstatus = block_fn_mentor_forum_status($activity, $menteeid, true); 
+							   // Waiting for grade
+							   if($modstatus == 'waitinggrade') {
+								   ++$waitingforgradeactivities;
+							   } else {
+								   // Ungraded
+							       ++$notattemptedactivities;
+							   }
+						} else if ($activity->modname == 'quiz') {
+							// Count waiting for grade quizzes without a grade from grade function.
+							$modstatus = block_fn_mentor_quiz_status($activity, $menteeid, true);
+							   // Waiting for grade
+							   if($modstatus == 'waitinggrade') {
+								   ++$waitingforgradeactivities;
+							   } else {
+								   // Ungraded
+							       ++$notattemptedactivities;
+							   }
+							
+						} else if ($activity->modname == 'lesson') {
+							// Count saved lessons that don't yet have a grade
+							
+							$modstatus = block_fn_mentor_lesson_status($activity, $menteeid, $course, true);
+							   // Saved
+							   if($modstatus == 'saved') {
+								    ++$savedactivities;
+							   } else {
+								 // Ungraded
+							     ++$notattemptedactivities;
+							   }
+						} else if ($activity->modname == 'journal') {
+							$modstatus = block_fn_mentor_journal_status($activity, $menteeid, $course, true);
+							// Saved
+							   if($modstatus == 'waitinggrade') {
+								    ++$waitingforgradeactivities;
+							   } else {
+								 // Ungraded
+							     ++$notattemptedactivities;
+							   }
+						} else {
+							// Ungraded
+							++$notattemptedactivities;
+						}
+						
+					}  else { 
+					//  Add other graded module types.
+					   if ($grade = $gradefunction($course->id, 'mod', $activity->modname, $activity->instance, $menteeid)) {
+							$usergrade = $grade->items[0]->grades[$menteeid];
+							if ($usergrade->grade !== null && $usergrade->dategraded !== null) {
+								if ($item->gradepass > 0) {
+									if ($usergrade->grade >= $item->gradepass) {
+											// Passed
+											++$completedactivities;
+									} else {
+										// Failed
+										++$incompletedactivities;
+									}
+								} else {
+									// Graded
+									++$completedactivities;
+								}
+							} else {
+							// Ungraded
+							++$notattemptedactivities;
+						   }
+					   }
+					} 
+				} // end check for grade function
+			} // end check for graded modules
+        } // end foreach activity
 
         if ($incompletedactivities == 0) {
             $completed = get_string('completed', 'block_fn_mentor');
@@ -2705,6 +3609,8 @@ function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) 
 
         $progressdata->completed = $completedactivities + $incompletedactivities;
         $progressdata->total = $completedactivities + $incompletedactivities + $savedactivities + $notattemptedactivities + $waitingforgradeactivities;
+		//SRINDHAL. Added to include waiting for grade activities in progress calculations with configuration.
+		$progressdata->completewaiting = $completedactivities + $incompletedactivities + $waitingforgradeactivities;
 
         $sql = "SELECT gg.id,
                        gg.rawgrademax,
@@ -2716,7 +3622,12 @@ function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) 
                    AND gi.courseid = ?
                    AND gg.userid = ?";
         if ($courseaverage = $DB->get_record_sql($sql, array('course', $course->id, $menteeid))) {
-            $progressdata->percentage = ($courseaverage->finalgrade / $courseaverage->rawgrademax) * 100;
+			// Prevent division by zero.
+            if ($courseaverage->rawgrademax > 0) {
+			   $progressdata->percentage = ($courseaverage->finalgrade / $courseaverage->rawgrademax) * 100;
+		   } else {
+			   $progressdata->percentage = 100;
+		   }
         }
 
     } else {
@@ -2727,6 +3638,88 @@ function block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray) 
 
     return $progressdata;
 }
+
+function block_fn_mentor_calculate_activity_progress ($course, $menteeid) {
+	//  Calculate the progress in course using dates for progress bar.
+    global $DB;
+	
+	$data = new stdClass;
+    $modgradesarray = get_graded_mods();
+	$usewaiting = get_config('block_fn_mentor', 'includewaitinggrade');
+	
+	$progressdata = block_fn_mentor_activity_progress($course, $menteeid, $modgradesarray);
+
+	if ($usewaiting) {
+		$data->activitycomplete = $progressdata->completewaiting;
+	} else {
+		$data->activitycomplete = $progressdata->completed;
+	}
+	$data->activitytotal = $progressdata->total;
+	if ($data->activitytotal > 0 ) {
+		$data->activpercentcomplete = round(($data->activitycomplete  / $data->activitytotal) * 100, 0);
+	} else {
+		$data->activpercentcomplete = 100;
+	}
+	$data->timecompleted = $progressdata->timecompleted;
+	$time = time();
+	$weekofseconds = 604800;
+	$sql = "SELECT ue.timestart, ue.timeend
+                          FROM {user_enrolments} ue
+                          JOIN {enrol} e
+                            ON e.id = ue.enrolid
+                         WHERE ue.userid = ?
+                           AND e.courseid = ?";
+	if ($enrolinfo = $DB->get_records_sql($sql, array($menteeid, $course->id))) {
+		if (count($enrolinfo) > 1) {
+			foreach($enrolinfo as $key => $value) {
+				if($value->timestart == 0 || $value->timeend == 0) {
+					unset($enrolinfo[$key]);
+				}
+			}
+		}
+		foreach ($enrolinfo as $enrol) {
+			$data->enrolstart = $enrol->timestart;
+			$data->enrolend = $enrol->timeend;
+		}
+		
+		if ($data->enrolstart == 0 || $data->enrolend == 0){
+			// FIND CURRENT WEEK.
+			$courseformat = course_get_format($course);
+			$courseformatoptions = $courseformat->get_format_options();
+			$coursenumsections = $courseformatoptions['numsections'];
+			
+	 
+			$weekdate = $course->startdate;
+			$weekdate += 7200;
+			$courseenddate = $course->startdate + ($weekofseconds * $coursenumsections);
+			// Calculate the current week based on today's date and the starting date of the course.
+			$currentweek = ($time > $course->startdate) ? (int) ((($time - $course->startdate) / $weekofseconds) + 1) : 0;
+			$currentweek = min($currentweek, $coursenumsections);
+			$data->totalweeks = (int)(($courseenddate - $course->startdate) / $weekofseconds);
+			$data->currentweek = $currentweek;
+			if ($data->activitytotal == 0) {
+				$data->activitiesperweek = 0;
+			} else {
+				$data->activitiesperweek = round(($data->activitytotal / $data->totalweeks), 1, PHP_ROUND_HALF_UP);
+			}
+		} else {
+			$data->totalweeks = (int)(($data->enrolend - $data->enrolstart) / $weekofseconds);
+			$data->currentweek = ($time > $data->enrolstart) ? (int) ((($time - $data->enrolstart) / $weekofseconds) + 1) : 0;
+			if ($data->activitytotal == 0) {
+				$data->activitiesperweek = 0;
+			} else if ($data->currentweek > $data->totalweeks) {
+				$data->activitiesperweek = $data->activitytotal;
+			} else {
+				$data->activitiesperweek = round(($data->activitytotal / $data->totalweeks), 1, PHP_ROUND_HALF_UP);
+			}
+		}
+		
+	} 
+	$data->currenttimepercentage = (($data->currentweek / $data->totalweeks) < 1) ? (int) (round(($data->currentweek / $data->totalweeks) * 100)) : 100;
+
+	return $data;
+}
+
 
 function block_fn_mentor_simplegradebook($course, $menteeuser, $modgradesarray) {
     global $CFG, $DB;
@@ -2811,10 +3804,16 @@ function block_fn_mentor_simplegradebook($course, $menteeuser, $modgradesarray) 
 
                     $libfile = $CFG->dirroot . '/mod/' . $mod->modname . '/lib.php';
                     if (file_exists($libfile)) {
-                        require_once($libfile);
-                        $gradefunction = $mod->modname . "_get_user_grades";
-
-                        if ((($mod->modname != 'forum') || ($instance->assessed > 0))
+						//  Check to see if this module is using their own get grades method or switch to the standard Moodle get grades function.	
+						require_once($libfile);						
+						$gradefunction = $mod->modname . "_get_user_grades";
+						if(!function_exists($gradefunction)) {
+							$gradefunction = "grade_get_grades";
+						}
+					}
+					if($item) {
+					//  Added advanced forum check.
+                        if (((($mod->modname != 'forum') || ($mod->modname != 'hsuforum')) || ($instance->assessed > 0))
                             && isset($modgradesarray[$mod->modname])) {
 
                             if (function_exists($gradefunction)) {
@@ -2827,95 +3826,357 @@ function block_fn_mentor_simplegradebook($course, $menteeuser, $modgradesarray) 
 
                                 $weekactivitycount[$i]['mod'][] = $image;
                                 $weekactivitycount[$i]['modname'][] = $instance->name;
+								
                                 foreach ($simplegradebook as $key => $value) {
+									
+                                    if (strpos($gradefunction, $mod->modname) !== false) {
+									//  Run through special cases first before applying standard grade checks.	
+										$grade = $gradefunction($instance, $key);
+										if ($modstatus = block_fn_mentor_assignment_status($mod, $key, true)) {
+											
+											switch ($modstatus) {
+												case 'submitted':
+													if ($instance->grade == 0) {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													} else if ($grade) {
+														if ($item->gradepass > 0) {
+															if ($grade[$key]->rawgrade >= $item->gradepass) {
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif';// Passed.
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															} else {
+																// Fail.
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif';
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															}
+														} else {
+															// Graded (grade-to-pass is not set).
+															$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+															$simplegradebook[$key]['avg'][] = array(
+																'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+															);
+														}
+													}
+													break;
 
-                                    if (($mod->modname == 'quiz')||($mod->modname == 'forum')) {
+												case 'saved':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'saved.gif';
+													break;
 
-                                        if ($grade = $gradefunction($instance, $key)) {
-                                            if ($item->gradepass > 0) {
-                                                if ($grade[$key]->rawgrade >= $item->gradepass) {
-                                                    $simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif'; // Passed.
-                                                    $simplegradebook[$key]['avg'][] = array(
-                                                        'grade' => $grade[$key]->rawgrade,
-                                                        'grademax' => $item->grademax
-                                                    );
-                                                } else {
-                                                    $simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif'; // Fail.
-                                                    $simplegradebook[$key]['avg'][] = array(
-                                                        'grade' => $grade[$key]->rawgrade,
-                                                        'grademax' => $item->grademax
-                                                    );
-                                                }
-                                            } else {
-                                                // Graded (grade-to-pass is not set).
-                                                $simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
-                                                $simplegradebook[$key]['avg'][] = array(
-                                                    'grade' => $grade[$key]->rawgrade,
-                                                    'grademax' => $item->grademax
-                                                );
-                                            }
-                                        } else {
+												case 'waitinggrade':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'unmarked.gif';
+													break;
+											}
+                                        } else if($modstatus = block_fn_mentor_forum_status($mod, $key, true)) {
+											// Check for forum status.
+										   switch ($modstatus) {
+												case 'submitted':
+													if ($instance->assessed == 0) {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													} else if ($grade) {
+														if ($item->gradepass > 0) {
+															if ($grade[$key]->rawgrade >= $item->gradepass) {
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif';// Passed.
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															} else {
+																// Fail.
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif';
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															}
+														} else {
+															// Graded (grade-to-pass is not set).
+															$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+															$simplegradebook[$key]['avg'][] = array(
+																'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+															);
+														}
+													}
+													break;
+
+												case 'saved':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'saved.gif';
+													break;
+
+												case 'waitinggrade':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'unmarked.gif';
+													break;
+											}
+										} else if($modstatus = block_fn_mentor_quiz_status($mod, $key, true)) {
+										   // Check for manually graded quizzes.
+										   switch ($modstatus) {
+												case 'submitted':
+													if ($instance->grade == 0) {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													} else if ($grade) {
+														if ($item->gradepass > 0) {
+															if ($grade[$key]->rawgrade >= $item->gradepass) {
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif';// Passed.
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															} else {
+																// Fail.
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif';
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															}
+														} else {
+															// Graded (grade-to-pass is not set).
+															$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+															$simplegradebook[$key]['avg'][] = array(
+																'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+															);
+														}
+													}
+													break;
+
+												case 'saved':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'saved.gif';
+													break;
+
+												case 'waitinggrade':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'unmarked.gif';
+													break;
+											}
+									    } else if ($modstatus = block_fn_mentor_lesson_status($mod, $key, $course, true)) {
+										    // Check for manually graded lesson essays.											
+										   switch ($modstatus) {
+												case 'submitted':
+													if ($instance->grade == 0) {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													} else if ($grade) {
+														if ($item->gradepass > 0) {
+															if ($grade[$key]->rawgrade >= $item->gradepass) {
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif';// Passed.
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															} else {
+																// Fail.
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif';
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															}
+														} else {
+															// Graded (grade-to-pass is not set).
+															$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+															$simplegradebook[$key]['avg'][] = array(
+																'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+															);
+														}
+													}
+													break;
+
+												case 'saved':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'saved.gif';
+													break;
+
+												case 'waitinggrade':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'unmarked.gif';
+													break;
+											}
+										 
+									    } else if ($modstatus = block_fn_mentor_journal_status($mod, $key, $course, true)) {
+											// Check ungraded submitted journal entries.													
+										   switch ($modstatus) {
+												case 'submitted':
+													if ($instance->grade == 0) {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													} else if ($grade) {
+														if ($item->gradepass > 0) {
+															if ($grade[$key]->rawgrade >= $item->gradepass) {
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif';// Passed.
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															} else {
+																// Fail.
+																$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif';
+																$simplegradebook[$key]['avg'][] = array(
+																	'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+																);
+															}
+														} else {
+															// Graded (grade-to-pass is not set).
+															$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+															$simplegradebook[$key]['avg'][] = array(
+																'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
+															);
+														}
+													}
+													break;
+
+												case 'saved':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'saved.gif';
+													break;
+
+												case 'waitinggrade':
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'unmarked.gif';
+													break;
+											}
+										} else if ($grade) {
+											if ($item) {
+												
+												if ($item->gradepass > 0) {
+													if ($grade[$key]->rawgrade >= $item->gradepass) {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif'; // Passed.
+														$simplegradebook[$key]['avg'][] = array(
+															'grade' => $grade[$key]->rawgrade,
+															'grademax' => $item->grademax
+														);
+													} else {
+														$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif'; // Fail.
+														$simplegradebook[$key]['avg'][] = array(
+															'grade' => $grade[$key]->rawgrade,
+															'grademax' => $item->grademax
+														);
+													}
+												} else {
+													// Graded (grade-to-pass is not set).
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													$simplegradebook[$key]['avg'][] = array(
+														'grade' => $grade[$key]->rawgrade,
+														'grademax' => $item->grademax
+													);
+												}
+												
+											}
+										} else {
+											
                                             $simplegradebook[$key]['grade'][$i][$mod->id] = 'ungraded.gif';
                                             if ($unsubmitted) {
                                                 $simplegradebook[$key]['avg'][] = array(
                                                     'grade' => 0, 'grademax' => $item->grademax
                                                 );
                                             }
-                                        }
-                                    } else if ($modstatus = block_fn_mentor_assignment_status($mod, $key, true)) {
-                                        switch ($modstatus) {
-                                            case 'submitted':
-                                                if ($instance->grade == 0) {
-                                                    $simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
-                                                } elseif ($grade = $gradefunction($instance, $key)) {
-                                                    if ($item->gradepass > 0) {
-                                                        if ($grade[$key]->rawgrade >= $item->gradepass) {
-                                                            $simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif';// Passed.
-                                                            $simplegradebook[$key]['avg'][] = array(
-                                                                'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
-                                                            );
-                                                        } else {
-                                                            // Fail.
-                                                            $simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif';
-                                                            $simplegradebook[$key]['avg'][] = array(
-                                                                'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
-                                                            );
-                                                        }
-                                                    } else {
-                                                        // Graded (grade-to-pass is not set).
-                                                        $simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
-                                                        $simplegradebook[$key]['avg'][] = array(
-                                                            'grade' => $grade[$key]->rawgrade, 'grademax' => $item->grademax
-                                                        );
-                                                    }
-                                                }
-                                                break;
-
-                                            case 'saved':
-                                                $simplegradebook[$key]['grade'][$i][$mod->id] = 'saved.gif';
-                                                break;
-
-                                            case 'waitinggrade':
-                                                $simplegradebook[$key]['grade'][$i][$mod->id] = 'unmarked.gif';
-                                                break;
-                                        }
+                                        } 
                                     } else {
-                                        $simplegradebook[$key]['grade'][$i][$mod->id] = 'ungraded.gif';
-                                        if ($unsubmitted) {
-                                            $simplegradebook[$key]['avg'][] = array('grade' => 0, 'grademax' => $item->grademax);
-                                        }
-                                    }
-                                }
-                            }
+										
+										if($grade = grade_get_grades($course->id, 'mod', $mod->modname, $mod->instance, $key)) {
+											$usergrade = $grade->items[0]->grades[$menteeuser->id];
+											if ($usergrade->grade) {
+												if ($item->gradepass > 0) {
+													if ($usergrade->grade >= $item->gradepass) {
+															$simplegradebook[$key]['grade'][$i][$mod->id] = 'marked.gif'; // Passed.
+															$simplegradebook[$key]['avg'][] = array(
+																'grade' => $usergrade->grade,
+																'grademax' => $item->grademax
+															);
+														} else {
+															$simplegradebook[$key]['grade'][$i][$mod->id] = 'incomplete.gif'; // Fail.
+															$simplegradebook[$key]['avg'][] = array(
+																'grade' => $usergrade->grade,
+																'grademax' => $item->grademax
+															);
+														}
+														
+												} else {
+													// Graded (grade-to-pass is not set).
+													$simplegradebook[$key]['grade'][$i][$mod->id] = 'graded_.gif';
+													$simplegradebook[$key]['avg'][] = array(
+														'grade' => $usergrade->grade,
+														'grademax' => $item->grademax
+													);
+												}
+											} else {
+												$simplegradebook[$key]['grade'][$i][$mod->id] = 'ungraded.gif';
+												if ($unsubmitted) {
+													$simplegradebook[$key]['avg'][] = array(
+														'grade' => 0, 'grademax' => $item->grademax
+													);
+												}
+												
+											}
+										} 
+										
+									} 
+									
+                                } //END. foreach
+                            } //END. gradefunction exists 
                         }
-                    }
+				    } //END. if grade book item
                 }
             }
         }
+		
         $weekactivitycount[$i]['numofweek'] = $numberofitem;
     }
 
     return array($simplegradebook, $weekactivitycount, $courseformat);
+}
+
+function block_fn_mentor_print_activity_progress ($course , $studentid) {
+	// Print a Course Progress Bar to the page.
+	global $OUTPUT;
+	
+	$html = '';
+	$progressbardata = block_fn_mentor_calculate_activity_progress ($course, $studentid);
+
+	if ($progressbardata->currentweek > $progressbardata->totalweeks) {
+		// account for past course dates that are a long time in the past.
+		$suggestedpacenum = $progressbardata->activitytotal;
+	} else {
+		$suggestedpacenum = round($progressbardata->activitiesperweek * $progressbardata->currentweek, 1);
+	}
+	$studentcompletednum = $progressbardata->activitycomplete;
+	
+	if ($progressbardata->activpercentcomplete < $progressbardata->currenttimepercentage) {
+		$color = 'bar-danger';
+	} else {
+		$color = 'bar-success';
+	}
+	$html .= '<div class="container-fluid">';
+	//$html .= '<h4>Track Progress</h4>';
+    $html .= '<div class="row-fluid"><br>';
+	if($progressbardata->timecompleted > 0) {
+		// Course completed
+		$html .= '<h5>Course Complete</h5>';
+		$html .= '<div class="progress progress-striped">';
+		$html .= '<div class="bar bar-success" role="progressbar" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100" style="width:100%">';
+		$html .= '100%';
+		$html .= '</div>'; // end progress bar div
+		$html .= '</div>'; // end progress div
+	} else if ($progressbardata->activitytotal == 0) {
+		// No activities to complete
+		$html .= '<div class="alert alert-info"><p>'.get_string('progressnoactivities', 'block_fn_mentor').'</p></div>';
+		
+	} else if ($progressbardata->activitytotal > 0 && $progressbardata->activpercentcomplete == 0) {
+		// Has not completed any activities yet.
+		$html .= '<h5>'.get_string('progresssuggestedpace', 'block_fn_mentor').' (activities)</h5>';
+		$html .= '<div class="progress progress-striped">';
+		$html .= '<div class="bar bar-success" role="progressbar" aria-valuenow="'.$suggestedpacenum.'" aria-valuemin="0" aria-valuemax="'.$progressbardata->activitytotal.'" style="width:'.$progressbardata->currenttimepercentage.'%">';
+		$html .= $suggestedpacenum;
+		$html .= '</div>'; // end progress bar div
+		$html .= '</div>'; // end progress div
+		$html .= '<h5>'.get_string('progressstudentpace', 'block_fn_mentor').' (activities)</h5>';
+		$html .= '<div class="alert alert-danger"><p>'.get_string('progressnoactivitiescomp', 'block_fn_mentor').'</p></div>';
+	} else {
+		$html .= '<h5>'.get_string('progresssuggestedpace', 'block_fn_mentor').' (activities)</h5>';
+		$html .= '<div class="progress progress-striped">';
+		$html .= '<div class="bar bar-success" role="progressbar" aria-valuenow="'.$suggestedpacenum.'" aria-valuemin="0" aria-valuemax="'.$progressbardata->activitytotal.'" style="width:'.$progressbardata->currenttimepercentage.'%">';
+		$html .= $suggestedpacenum;
+		$html .= '</div>'; // end progress bar div
+		$html .= '</div>'; // end progress div
+		$html .= '<h5>'.get_string('progressstudentpace', 'block_fn_mentor').' (activities)</h5>';
+		$html .= '<div class="progress progress-striped active">';
+		$html .= '<div class="bar '.$color.'" role="progressbar" aria-valuenow="'.$studentcompletednum.'" aria-valuemin="0" aria-valuemax="'.$progressbardata->activitytotal.'" style="width:'.$progressbardata->activpercentcomplete.'%">';
+		$html .= $studentcompletednum;
+		$html .= '</div>'; // end progress bar div
+		$html .= '</div>'; // end progress div
+	}
+	$html .= '</div>'; //end row
+    $html .= '</div>'; // end container
+	
+    return $html;
 }
 
 function block_fn_mentor_generate_report(progress_bar $progressbar = null) {
@@ -2923,12 +4184,7 @@ function block_fn_mentor_generate_report(progress_bar $progressbar = null) {
     $inprogress = get_config('block_fn_mentor', 'inprogress');
     $reportdate = get_config('block_fn_mentor', 'reportdate');
 
-    $modgradesarray = array(
-        'assign' => 'assign.submissions.fn.php',
-        'quiz' => 'quiz.submissions.fn.php',
-        'assignment' => 'assignment.submissions.fn.php',
-        'forum' => 'forum.submissions.fn.php',
-    );
+    $modgradesarray = get_graded_mods();
 
     if ($inprogress && ((time() - $reportdate) < 10 * 60)) {
         return;
